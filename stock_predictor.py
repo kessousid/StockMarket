@@ -2076,18 +2076,21 @@ def main():
             "It should NOT be used as the sole basis for investment decisions. "
             "Past performance does not guarantee future results. Always do your own research."
         )
-    elif screener_btn and screener_mode:
-        results = run_screener(screener_stocks)
+    elif screener_mode:
+        if screener_btn:
+            results = run_screener(screener_stocks)
+            st.session_state["screener_results"] = results
+
+        results = st.session_state.get("screener_results")
         if results:
             st.header("Stock Screener Results")
             render_screener_results(results)
-        else:
+        elif screener_btn:
             st.warning("No stocks could be analyzed. Please try again.")
-    else:
-        if screener_mode:
-            st.info("Select a scope and click **Run Screener** to scan stocks.")
         else:
-            st.info("Select a stock from the sidebar and click **Analyze Stock** to begin.")
+            st.info("Select a scope and click **Run Screener** to scan stocks.")
+    else:
+        st.info("Select a stock from the sidebar and click **Analyze Stock** to begin.")
 
 
 if __name__ == "__main__":
