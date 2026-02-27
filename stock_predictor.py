@@ -840,12 +840,20 @@ def fetch_all_nse_stocks():
         return {}
 
 
+def _fetch_wiki_html(url):
+    """Fetch Wikipedia page HTML with a proper User-Agent header."""
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; StockPredictor/1.0)"}
+    resp = requests.get(url, headers=headers, timeout=15)
+    resp.raise_for_status()
+    return resp.text
+
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_sp500_stocks():
     """Fetch S&P 500 constituents from Wikipedia."""
     try:
-        url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-        dfs = pd.read_html(url)
+        html = _fetch_wiki_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
+        dfs = pd.read_html(io.StringIO(html))
         df = dfs[0]
         return {row["Security"]: row["Symbol"] for _, row in df.iterrows()}
     except Exception:
@@ -856,8 +864,8 @@ def fetch_sp500_stocks():
 def fetch_nasdaq100_stocks():
     """Fetch NASDAQ 100 constituents from Wikipedia."""
     try:
-        url = "https://en.wikipedia.org/wiki/Nasdaq-100"
-        dfs = pd.read_html(url)
+        html = _fetch_wiki_html("https://en.wikipedia.org/wiki/Nasdaq-100")
+        dfs = pd.read_html(io.StringIO(html))
         for df in dfs:
             if "Ticker" in df.columns and "Company" in df.columns:
                 return {row["Company"]: row["Ticker"] for _, row in df.iterrows()}
@@ -870,8 +878,8 @@ def fetch_nasdaq100_stocks():
 def fetch_dow30_stocks():
     """Fetch Dow 30 constituents from Wikipedia."""
     try:
-        url = "https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average"
-        dfs = pd.read_html(url)
+        html = _fetch_wiki_html("https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average")
+        dfs = pd.read_html(io.StringIO(html))
         for df in dfs:
             if "Symbol" in df.columns and "Company" in df.columns:
                 return {row["Company"]: row["Symbol"] for _, row in df.iterrows()}
