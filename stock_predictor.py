@@ -1,6 +1,6 @@
 """
-Indian Stock Market Prediction Tool
-Predicts Buy/Hold/Sell for NSE stocks using technical analysis,
+Stock Market Prediction Tool (India + US)
+Predicts Buy/Hold/Sell for NSE and US stocks using technical analysis,
 news sentiment analysis, and quarterly fundamental analysis.
 """
 
@@ -17,6 +17,7 @@ import plotly.graph_objects as go
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus
+import io
 
 # Technical analysis constants
 SMA_SHORT = 20
@@ -674,6 +675,73 @@ STOCK_SECTORS = {
     },
 }
 
+US_STOCK_SECTORS = {
+    "Technology": {
+        "Apple": "AAPL", "Microsoft": "MSFT", "NVIDIA": "NVDA",
+        "Alphabet": "GOOGL", "Meta Platforms": "META", "Broadcom": "AVGO",
+        "Adobe": "ADBE", "Salesforce": "CRM", "AMD": "AMD",
+        "Intel": "INTC", "Cisco": "CSCO", "Oracle": "ORCL",
+        "IBM": "IBM", "Qualcomm": "QCOM", "Texas Instruments": "TXN",
+    },
+    "Healthcare": {
+        "UnitedHealth": "UNH", "Johnson & Johnson": "JNJ", "Eli Lilly": "LLY",
+        "Pfizer": "PFE", "AbbVie": "ABBV", "Merck": "MRK",
+        "Thermo Fisher": "TMO", "Abbott Laboratories": "ABT",
+        "Amgen": "AMGN", "Gilead Sciences": "GILD", "Moderna": "MRNA",
+        "Intuitive Surgical": "ISRG", "Danaher": "DHR",
+    },
+    "Financials": {
+        "JPMorgan Chase": "JPM", "Bank of America": "BAC", "Wells Fargo": "WFC",
+        "Goldman Sachs": "GS", "Morgan Stanley": "MS", "Citigroup": "C",
+        "BlackRock": "BLK", "Charles Schwab": "SCHW", "American Express": "AXP",
+        "Visa": "V", "Mastercard": "MA", "PayPal": "PYPL",
+        "S&P Global": "SPGI", "CME Group": "CME",
+    },
+    "Consumer Discretionary": {
+        "Amazon": "AMZN", "Tesla": "TSLA", "Home Depot": "HD",
+        "McDonald's": "MCD", "Nike": "NKE", "Starbucks": "SBUX",
+        "Booking Holdings": "BKNG", "Lowe's": "LOW", "TJX Companies": "TJX",
+        "Chipotle": "CMG", "Ross Stores": "ROST", "Marriott": "MAR",
+    },
+    "Consumer Staples": {
+        "Procter & Gamble": "PG", "Coca-Cola": "KO", "PepsiCo": "PEP",
+        "Costco": "COST", "Walmart": "WMT", "Colgate-Palmolive": "CL",
+        "Mondelez": "MDLZ", "Philip Morris": "PM", "Altria": "MO",
+        "Estee Lauder": "EL", "General Mills": "GIS", "Kraft Heinz": "KHC",
+    },
+    "Energy": {
+        "ExxonMobil": "XOM", "Chevron": "CVX", "ConocoPhillips": "COP",
+        "Schlumberger": "SLB", "EOG Resources": "EOG", "Pioneer Natural": "PXD",
+        "Marathon Petroleum": "MPC", "Valero Energy": "VLO",
+        "Phillips 66": "PSX", "Devon Energy": "DVN", "Hess": "HES",
+    },
+    "Industrials": {
+        "Boeing": "BA", "Caterpillar": "CAT", "Honeywell": "HON",
+        "Union Pacific": "UNP", "Lockheed Martin": "LMT", "Raytheon": "RTX",
+        "3M": "MMM", "General Electric": "GE", "Deere & Company": "DE",
+        "FedEx": "FDX", "UPS": "UPS", "Northrop Grumman": "NOC",
+    },
+    "Communication Services": {
+        "Alphabet (GOOG)": "GOOG", "Meta Platforms (META)": "META",
+        "Netflix": "NFLX", "Walt Disney": "DIS", "Comcast": "CMCSA",
+        "T-Mobile": "TMUS", "AT&T": "T", "Verizon": "VZ",
+        "Activision Blizzard": "ATVI", "Electronic Arts": "EA",
+        "Warner Bros Discovery": "WBD",
+    },
+    "Utilities": {
+        "NextEra Energy": "NEE", "Duke Energy": "DUK", "Southern Company": "SO",
+        "Dominion Energy": "D", "Exelon": "EXC", "American Electric Power": "AEP",
+        "Sempra": "SRE", "Xcel Energy": "XEL", "WEC Energy": "WEC",
+        "Eversource Energy": "ES",
+    },
+    "Real Estate": {
+        "Prologis": "PLD", "American Tower": "AMT", "Crown Castle": "CCI",
+        "Equinix": "EQIX", "Public Storage": "PSA", "Simon Property": "SPG",
+        "Realty Income": "O", "Digital Realty": "DLR", "Welltower": "WELL",
+        "VICI Properties": "VICI",
+    },
+}
+
 # =============================================================================
 # Section 3: Helper Functions
 # =============================================================================
@@ -752,20 +820,89 @@ def fetch_stock_data(ticker):
         return {"status": "error", "message": str(e)}
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_all_nse_stocks():
+    """Fetch complete list of NSE-listed equities from official NSE CSV."""
+    url = "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        df = pd.read_csv(io.StringIO(resp.text))
+        stocks = {}
+        for _, row in df.iterrows():
+            symbol = str(row.get("SYMBOL", "")).strip()
+            name = str(row.get("NAME OF COMPANY", "")).strip()
+            if symbol and name and row.get(" SERIES") and "EQ" in str(row.get(" SERIES")):
+                stocks[name] = f"{symbol}.NS"
+        return stocks
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_sp500_stocks():
+    """Fetch S&P 500 constituents from Wikipedia."""
+    try:
+        url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+        dfs = pd.read_html(url)
+        df = dfs[0]
+        return {row["Security"]: row["Symbol"] for _, row in df.iterrows()}
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_nasdaq100_stocks():
+    """Fetch NASDAQ 100 constituents from Wikipedia."""
+    try:
+        url = "https://en.wikipedia.org/wiki/Nasdaq-100"
+        dfs = pd.read_html(url)
+        for df in dfs:
+            if "Ticker" in df.columns and "Company" in df.columns:
+                return {row["Company"]: row["Ticker"] for _, row in df.iterrows()}
+        return {}
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_dow30_stocks():
+    """Fetch Dow 30 constituents from Wikipedia."""
+    try:
+        url = "https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average"
+        dfs = pd.read_html(url)
+        for df in dfs:
+            if "Symbol" in df.columns and "Company" in df.columns:
+                return {row["Company"]: row["Symbol"] for _, row in df.iterrows()}
+        return {}
+    except Exception:
+        return {}
+
+
 @st.cache_data(ttl=1800, show_spinner=False)
-def fetch_news_headlines(stock_name, sector):
+def fetch_news_headlines(stock_name, sector, market="India"):
     """Fetch news from Google News RSS for stock, sector, and market."""
     results = {"stock": [], "sector": [], "market": []}
 
-    queries = {
-        "stock": f"{stock_name} NSE stock",
-        "sector": f"India {sector} sector stock market",
-        "market": "Indian stock market Nifty economy policy",
-    }
+    if market == "US":
+        queries = {
+            "stock": f"{stock_name} stock NYSE NASDAQ",
+            "sector": f"US {sector} sector stock market",
+            "market": "US stock market S&P 500 economy Federal Reserve",
+        }
+        hl, gl, ceid = "en-US", "US", "US:en"
+    else:
+        queries = {
+            "stock": f"{stock_name} NSE stock",
+            "sector": f"India {sector} sector stock market",
+            "market": "Indian stock market Nifty economy policy",
+        }
+        hl, gl, ceid = "en-IN", "IN", "IN:en"
 
     for category, query in queries.items():
         try:
-            url = f"https://news.google.com/rss/search?q={quote_plus(query)}&hl=en-IN&gl=IN&ceid=IN:en"
+            url = f"https://news.google.com/rss/search?q={quote_plus(query)}&hl={hl}&gl={gl}&ceid={ceid}"
             feed = feedparser.parse(url)
             headlines = []
             for entry in feed.entries[:10]:
@@ -1312,7 +1449,7 @@ def compute_key_metrics(info, annual_income, annual_balance, cashflow):
 # Section 7c: Bulk Stock Screener
 # =============================================================================
 
-def run_screener(stock_dict):
+def run_screener(stock_dict, market="India"):
     """Run full analysis on multiple stocks, return list of result dicts."""
     results = []
     total = len(stock_dict)
@@ -1335,7 +1472,7 @@ def run_screener(stock_dict):
             technical = calculate_technical_indicators(stock_data["history"])
 
             # Sentiment
-            news = fetch_news_headlines(name, sector)
+            news = fetch_news_headlines(name, sector, market=market)
             sentiment = analyze_sentiment(news)
 
             # Fundamental
@@ -1801,7 +1938,7 @@ def render_news_table(sentiment_result):
         st.markdown("---")
 
 
-def render_price_chart(history, stock_name):
+def render_price_chart(history, stock_name, market="India"):
     """Render stock price chart with SMAs."""
     close = history["Close"]
     sma_short = close.rolling(window=SMA_SHORT).mean()
@@ -1823,7 +1960,7 @@ def render_price_chart(history, stock_name):
     fig.update_layout(
         title=f"{stock_name} - 1 Year Price Chart",
         xaxis_title="Date",
-        yaxis_title="Price (INR)",
+        yaxis_title="Price (USD)" if market == "US" else "Price (INR)",
         height=400,
         margin=dict(t=40, b=40, l=50, r=20),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
@@ -1837,66 +1974,134 @@ def render_price_chart(history, stock_name):
 
 def main():
     st.set_page_config(
-        page_title="Indian Stock Predictor",
+        page_title="Stock Market Predictor",
         page_icon="chart_with_upwards_trend",
         layout="wide",
     )
 
-    st.title("Indian Stock Market Prediction Tool")
-    st.caption("Technical Analysis + News Sentiment + Quarterly Fundamentals")
-
     # Sidebar
     with st.sidebar:
-        st.header("Indian Stock Market")
-        input_mode = st.radio(
-            "How do you want to select a stock?",
-            options=["Browse by Category", "Browse by Sector", "Enter Custom Ticker", "Stock Screener"],
-            horizontal=True,
-        )
+        market = st.radio("Market", ["India", "US"], horizontal=True)
 
-        if input_mode == "Browse by Category":
-            category = st.selectbox(
-                "Select Category",
-                options=list(STOCK_CATEGORIES.keys()),
+        if market == "India":
+            st.header("Indian Stock Market")
+            input_mode = st.radio(
+                "How do you want to select a stock?",
+                options=["Browse by Category", "Browse by Sector", "Enter Custom Ticker", "Stock Screener"],
+                horizontal=True,
             )
-            stock_dict = STOCK_CATEGORIES[category]
-            stock_names = sorted(stock_dict.keys())
-            default_idx = (
-                stock_names.index("Reliance Industries")
-                if category == "Large Cap (Nifty 50)" and "Reliance Industries" in stock_names
-                else 0
-            )
-            selected_stock = st.selectbox(
-                "Select Stock",
-                options=stock_names,
-                index=default_idx,
-            )
-            ticker = stock_dict[selected_stock]
-            stock_name = selected_stock
-        elif input_mode == "Browse by Sector":
-            sector_name = st.selectbox("Select Sector", options=sorted(STOCK_SECTORS.keys()))
-            sector_stocks = STOCK_SECTORS[sector_name]
-            stock_names = sorted(sector_stocks.keys())
-            selected_stock = st.selectbox("Select Stock", options=stock_names)
-            ticker = sector_stocks[selected_stock]
-            stock_name = selected_stock
-        elif input_mode == "Enter Custom Ticker":
-            st.markdown("Enter any NSE stock symbol (e.g. `ZOMATO`, `IRCTC`, `PAYTM`)")
-            custom_ticker = st.text_input(
-                "NSE Symbol",
-                value="",
-                placeholder="e.g. ZOMATO",
-            ).strip().upper()
-            if custom_ticker:
-                ticker = custom_ticker if custom_ticker.endswith(".NS") else f"{custom_ticker}.NS"
-                stock_name = custom_ticker.replace(".NS", "")
+
+            if input_mode == "Browse by Category":
+                category_options = list(STOCK_CATEGORIES.keys()) + ["All NSE Stocks (~2,600)"]
+                category = st.selectbox(
+                    "Select Category",
+                    options=category_options,
+                )
+                if category == "All NSE Stocks (~2,600)":
+                    with st.spinner("Fetching full NSE stock list..."):
+                        stock_dict = fetch_all_nse_stocks()
+                    if not stock_dict:
+                        st.warning("Could not fetch NSE list. Showing curated stocks instead.")
+                        all_stocks = {}
+                        for cat_dict in STOCK_CATEGORIES.values():
+                            for n, t in cat_dict.items():
+                                if t not in all_stocks.values():
+                                    all_stocks[n] = t
+                        stock_dict = all_stocks
+                else:
+                    stock_dict = STOCK_CATEGORIES[category]
+                stock_names = sorted(stock_dict.keys())
+                default_idx = (
+                    stock_names.index("Reliance Industries")
+                    if category == "Large Cap (Nifty 50)" and "Reliance Industries" in stock_names
+                    else 0
+                )
+                selected_stock = st.selectbox(
+                    "Select Stock",
+                    options=stock_names,
+                    index=default_idx,
+                )
+                ticker = stock_dict[selected_stock]
+                stock_name = selected_stock
+            elif input_mode == "Browse by Sector":
+                sector_name = st.selectbox("Select Sector", options=sorted(STOCK_SECTORS.keys()))
+                sector_stocks = STOCK_SECTORS[sector_name]
+                stock_names = sorted(sector_stocks.keys())
+                selected_stock = st.selectbox("Select Stock", options=stock_names)
+                ticker = sector_stocks[selected_stock]
+                stock_name = selected_stock
+            elif input_mode == "Enter Custom Ticker":
+                st.markdown("Enter any NSE stock symbol (e.g. `ZOMATO`, `IRCTC`, `PAYTM`)")
+                custom_ticker = st.text_input(
+                    "NSE Symbol",
+                    value="",
+                    placeholder="e.g. ZOMATO",
+                ).strip().upper()
+                if custom_ticker:
+                    ticker = custom_ticker if custom_ticker.endswith(".NS") else f"{custom_ticker}.NS"
+                    stock_name = custom_ticker.replace(".NS", "")
+                else:
+                    ticker = None
+                    stock_name = None
             else:
+                # Stock Screener mode
                 ticker = None
                 stock_name = None
         else:
-            # Stock Screener mode
-            ticker = None
-            stock_name = None
+            # US Market
+            st.header("US Stock Market")
+            input_mode = st.radio(
+                "How do you want to select a stock?",
+                options=["Browse by Index", "Browse by Sector", "Enter Custom Ticker", "Stock Screener"],
+                horizontal=True,
+            )
+
+            if input_mode == "Browse by Index":
+                index_name = st.selectbox(
+                    "Select Index",
+                    options=["S&P 500", "NASDAQ 100", "Dow 30"],
+                )
+                with st.spinner("Loading index constituents..."):
+                    if index_name == "S&P 500":
+                        stock_dict = fetch_sp500_stocks()
+                    elif index_name == "NASDAQ 100":
+                        stock_dict = fetch_nasdaq100_stocks()
+                    else:
+                        stock_dict = fetch_dow30_stocks()
+
+                if not stock_dict:
+                    st.warning(f"Could not fetch {index_name} constituents. Try again later.")
+                    ticker = None
+                    stock_name = None
+                else:
+                    stock_names = sorted(stock_dict.keys())
+                    selected_stock = st.selectbox("Select Stock", options=stock_names)
+                    ticker = stock_dict[selected_stock]
+                    stock_name = selected_stock
+            elif input_mode == "Browse by Sector":
+                sector_name = st.selectbox("Select Sector", options=sorted(US_STOCK_SECTORS.keys()))
+                sector_stocks = US_STOCK_SECTORS[sector_name]
+                stock_names = sorted(sector_stocks.keys())
+                selected_stock = st.selectbox("Select Stock", options=stock_names)
+                ticker = sector_stocks[selected_stock]
+                stock_name = selected_stock
+            elif input_mode == "Enter Custom Ticker":
+                st.markdown("Enter any US stock ticker (e.g. `AAPL`, `MSFT`, `TSLA`)")
+                custom_ticker = st.text_input(
+                    "US Ticker",
+                    value="",
+                    placeholder="e.g. AAPL",
+                ).strip().upper()
+                if custom_ticker:
+                    ticker = custom_ticker
+                    stock_name = custom_ticker
+                else:
+                    ticker = None
+                    stock_name = None
+            else:
+                # Stock Screener mode
+                ticker = None
+                stock_name = None
 
         st.markdown("---")
 
@@ -1907,20 +2112,55 @@ def main():
         analyze_btn = False
 
         if screener_mode:
-            scope_options = ["All Stocks"] + list(STOCK_CATEGORIES.keys()) + sorted(STOCK_SECTORS.keys())
-            screener_scope = st.selectbox("Screener Scope", options=scope_options)
+            if market == "India":
+                scope_options = (
+                    ["All NSE Stocks", "Curated Stocks (277)"]
+                    + list(STOCK_CATEGORIES.keys())
+                    + sorted(STOCK_SECTORS.keys())
+                )
+                screener_scope = st.selectbox("Screener Scope", options=scope_options)
 
-            if screener_scope == "All Stocks":
-                all_stocks = {}
-                for cat_dict in STOCK_CATEGORIES.values():
-                    for name, tick in cat_dict.items():
-                        if tick not in all_stocks.values():
-                            all_stocks[name] = tick
-                screener_stocks = all_stocks
-            elif screener_scope in STOCK_CATEGORIES:
-                screener_stocks = STOCK_CATEGORIES[screener_scope]
-            elif screener_scope in STOCK_SECTORS:
-                screener_stocks = STOCK_SECTORS[screener_scope]
+                if screener_scope == "All NSE Stocks":
+                    with st.spinner("Fetching NSE stock list..."):
+                        screener_stocks = fetch_all_nse_stocks()
+                    if not screener_stocks:
+                        st.warning("Could not fetch NSE stock list. Falling back to curated stocks.")
+                        all_stocks = {}
+                        for cat_dict in STOCK_CATEGORIES.values():
+                            for name, tick in cat_dict.items():
+                                if tick not in all_stocks.values():
+                                    all_stocks[name] = tick
+                        screener_stocks = all_stocks
+                elif screener_scope == "Curated Stocks (277)":
+                    all_stocks = {}
+                    for cat_dict in STOCK_CATEGORIES.values():
+                        for name, tick in cat_dict.items():
+                            if tick not in all_stocks.values():
+                                all_stocks[name] = tick
+                    screener_stocks = all_stocks
+                elif screener_scope in STOCK_CATEGORIES:
+                    screener_stocks = STOCK_CATEGORIES[screener_scope]
+                elif screener_scope in STOCK_SECTORS:
+                    screener_stocks = STOCK_SECTORS[screener_scope]
+            else:
+                # US screener
+                scope_options = ["S&P 500", "NASDAQ 100", "Dow 30"] + sorted(US_STOCK_SECTORS.keys())
+                screener_scope = st.selectbox("Screener Scope", options=scope_options)
+
+                if screener_scope == "S&P 500":
+                    with st.spinner("Fetching S&P 500 list..."):
+                        screener_stocks = fetch_sp500_stocks()
+                elif screener_scope == "NASDAQ 100":
+                    with st.spinner("Fetching NASDAQ 100 list..."):
+                        screener_stocks = fetch_nasdaq100_stocks()
+                elif screener_scope == "Dow 30":
+                    with st.spinner("Fetching Dow 30 list..."):
+                        screener_stocks = fetch_dow30_stocks()
+                elif screener_scope in US_STOCK_SECTORS:
+                    screener_stocks = US_STOCK_SECTORS[screener_scope]
+
+                if not screener_stocks:
+                    st.warning("Could not fetch stock list. Try again later.")
 
             st.markdown(f"**Stocks to scan:** {len(screener_stocks)}")
             screener_btn = st.button(
@@ -1946,6 +2186,13 @@ def main():
             "Always consult a qualified financial advisor."
         )
 
+    # Page title adapts to market
+    if market == "India":
+        st.title("Indian Stock Market Prediction Tool")
+    else:
+        st.title("US Stock Market Prediction Tool")
+    st.caption("Technical Analysis + News Sentiment + Quarterly Fundamentals")
+
     # Main content
     if not screener_mode and analyze_btn and ticker:
         # Fetch data
@@ -1964,7 +2211,7 @@ def main():
             st.markdown(f"**Sector:** {sector}")
 
         with st.spinner("Fetching news headlines..."):
-            news_data = fetch_news_headlines(selected_stock, sector)
+            news_data = fetch_news_headlines(selected_stock, sector, market=market)
 
         # Run analyses
         with st.spinner("Running technical analysis..."):
@@ -2060,7 +2307,7 @@ def main():
 
         # Price chart
         st.header("Price Chart")
-        price_fig = render_price_chart(stock_data["history"], selected_stock)
+        price_fig = render_price_chart(stock_data["history"], selected_stock, market=market)
         st.plotly_chart(price_fig, use_container_width=True)
 
         st.markdown("---")
@@ -2078,7 +2325,7 @@ def main():
         )
     elif screener_mode:
         if screener_btn:
-            results = run_screener(screener_stocks)
+            results = run_screener(screener_stocks, market=market)
             st.session_state["screener_results"] = results
 
         results = st.session_state.get("screener_results")
