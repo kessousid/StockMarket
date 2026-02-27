@@ -888,6 +888,39 @@ def fetch_dow30_stocks():
         return {}
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def _fetch_exchange_stocks(exchange):
+    """Fetch all stocks for a given exchange (nyse/nasdaq) from NASDAQ API."""
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; StockPredictor/1.0)"}
+    url = f"https://api.nasdaq.com/api/screener/stocks?tableType=traded&exchange={exchange}&limit=10000"
+    try:
+        resp = requests.get(url, headers=headers, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        rows = data.get("data", {}).get("table", {}).get("rows", [])
+        stocks = {}
+        for row in rows:
+            symbol = row.get("symbol", "").strip()
+            name = row.get("name", "").strip()
+            if symbol and name:
+                stocks[name] = symbol
+        return stocks
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_nyse_stocks():
+    """Fetch all NYSE-listed stocks."""
+    return _fetch_exchange_stocks("nyse")
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_nasdaq_stocks():
+    """Fetch all NASDAQ-listed stocks."""
+    return _fetch_exchange_stocks("nasdaq")
+
+
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_news_headlines(stock_name, sector, market="India"):
     """Fetch news from Google News RSS for stock, sector, and market."""
@@ -2067,15 +2100,19 @@ def main():
             if input_mode == "Browse by Index":
                 index_name = st.selectbox(
                     "Select Index",
-                    options=["S&P 500", "NASDAQ 100", "Dow 30"],
+                    options=["S&P 500", "NASDAQ 100", "Dow 30", "NYSE (~2,700)", "NASDAQ (~4,000)"],
                 )
                 with st.spinner("Loading index constituents..."):
                     if index_name == "S&P 500":
                         stock_dict = fetch_sp500_stocks()
                     elif index_name == "NASDAQ 100":
                         stock_dict = fetch_nasdaq100_stocks()
-                    else:
+                    elif index_name == "Dow 30":
                         stock_dict = fetch_dow30_stocks()
+                    elif index_name == "NYSE (~2,700)":
+                        stock_dict = fetch_nyse_stocks()
+                    else:
+                        stock_dict = fetch_nasdaq_stocks()
 
                 if not stock_dict:
                     st.warning(f"Could not fetch {index_name} constituents. Try again later.")
@@ -2152,7 +2189,10 @@ def main():
                     screener_stocks = STOCK_SECTORS[screener_scope]
             else:
                 # US screener
-                scope_options = ["S&P 500", "NASDAQ 100", "Dow 30"] + sorted(US_STOCK_SECTORS.keys())
+                scope_options = (
+                    ["S&P 500", "NASDAQ 100", "Dow 30", "NYSE (~2,700)", "NASDAQ (~4,000)"]
+                    + sorted(US_STOCK_SECTORS.keys())
+                )
                 screener_scope = st.selectbox("Screener Scope", options=scope_options)
 
                 if screener_scope == "S&P 500":
@@ -2164,6 +2204,12 @@ def main():
                 elif screener_scope == "Dow 30":
                     with st.spinner("Fetching Dow 30 list..."):
                         screener_stocks = fetch_dow30_stocks()
+                elif screener_scope == "NYSE (~2,700)":
+                    with st.spinner("Fetching NYSE stock list..."):
+                        screener_stocks = fetch_nyse_stocks()
+                elif screener_scope == "NASDAQ (~4,000)":
+                    with st.spinner("Fetching NASDAQ stock list..."):
+                        screener_stocks = fetch_nasdaq_stocks()
                 elif screener_scope in US_STOCK_SECTORS:
                     screener_stocks = US_STOCK_SECTORS[screener_scope]
 
