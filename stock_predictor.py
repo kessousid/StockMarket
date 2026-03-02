@@ -18,6 +18,8 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus
 import io
+import json
+import os
 
 # Technical analysis constants
 SMA_SHORT = 20
@@ -1486,6 +1488,256 @@ def compute_key_metrics(info, annual_income, annual_balance, cashflow):
     return metrics
 
 
+
+# =============================================================================
+# Section 7b: Screen Builder - Saved Screens and Filter Logic
+# =============================================================================
+
+SAVED_SCREENS_FILE = "saved_screens.json"
+
+SCREENER_FIELDS = {
+    "Action":            {"type": "categorical", "values": ["BUY", "HOLD", "SELL"]},
+    "Score":             {"type": "numeric", "hint": "-1.0 to 1.0"},
+    "Confidence":        {"type": "numeric", "hint": "0 to 100"},
+    "Tech Score":        {"type": "numeric", "hint": "-1.0 to 1.0"},
+    "Sentiment Score":   {"type": "numeric", "hint": "-1.0 to 1.0"},
+    "Fundamental Score": {"type": "numeric", "hint": "-1.0 to 1.0"},
+    "P/E":               {"type": "numeric", "hint": "e.g. < 25"},
+    "P/B":               {"type": "numeric", "hint": "e.g. < 3"},
+    "ROE":               {"type": "numeric", "hint": "e.g. > 0.15"},
+    "ROCE":              {"type": "numeric", "hint": "e.g. > 0.12"},
+    "Piotroski":         {"type": "numeric", "hint": "0 to 9"},
+    "D/E":               {"type": "numeric", "hint": "e.g. < 1.0"},
+    "Current Ratio":     {"type": "numeric", "hint": "e.g. > 1.5"},
+    "CMP":               {"type": "numeric", "hint": "Current Market Price"},
+    "Market Cap":        {"type": "numeric", "hint": "in absolute value"},
+}
+
+NUMERIC_OPS = [">=", ">", "<=", "<", "==", "!="]
+CATEGORICAL_OPS = ["==", "!="]
+
+
+def load_saved_screens():
+    """Load saved screens from JSON file."""
+    try:
+        if os.path.exists(SAVED_SCREENS_FILE):
+            with open(SAVED_SCREENS_FILE, "r") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def save_screens_to_file(screens):
+    """Persist screens dict to JSON file."""
+    try:
+        with open(SAVED_SCREENS_FILE, "w") as f:
+            json.dump(screens, f, indent=2)
+    except Exception:
+        pass
+
+
+def apply_screen_filters(df, conditions, connectors):
+    """Apply AND/OR filter conditions to a screener results dataframe."""
+    if not conditions or df.empty:
+        return df
+    masks = []
+    for cond in conditions:
+        field = cond.get("field")
+        op = cond.get("operator")
+        value = cond.get("value")
+        if field not in df.columns:
+            masks.append(pd.Series([True] * len(df), index=df.index))
+            continue
+        col = df[field]
+        field_info = SCREENER_FIELDS.get(field, {"type": "numeric"})
+        if field_info["type"] == "categorical":
+            if op == "==":
+                mask = col == value
+            elif op == "!=":
+                mask = col != value
+            else:
+                mask = pd.Series([True] * len(df), index=df.index)
+        else:
+            col_num = pd.to_numeric(col, errors="coerce")
+            try:
+                num_val = float(value)
+            except (ValueError, TypeError):
+                mask = pd.Series([True] * len(df), index=df.index)
+            else:
+                if op == ">":
+                    mask = col_num > num_val
+                elif op == ">=":
+                    mask = col_num >= num_val
+                elif op == "<":
+                    mask = col_num < num_val
+                elif op == "<=":
+                    mask = col_num <= num_val
+                elif op == "==":
+                    mask = col_num == num_val
+                elif op == "!=":
+                    mask = col_num != num_val
+                else:
+                    mask = pd.Series([True] * len(df), index=df.index)
+        masks.append(mask.fillna(False))
+    if not masks:
+        return df
+    result_mask = masks[0]
+    for i, connector in enumerate(connectors):
+        if i + 1 < len(masks):
+            if connector == "AND":
+                result_mask = result_mask & masks[i + 1]
+            else:
+                result_mask = result_mask | masks[i + 1]
+    return df[result_mask]
+
+
+def render_screen_builder():
+    """Render the Create New Screen panel in the main content area."""
+    st.subheader("Create New Screen")
+    st.caption("Build a custom filter using AND / OR conditions on screener metrics.")
+
+    screen_name = st.text_input(
+        "Screen Name",
+        value=st.session_state.get("sb_screen_name", ""),
+        placeholder="e.g. High ROE Value Stocks",
+        key="sb_screen_name",
+    )
+
+    if "sb_conditions" not in st.session_state:
+        st.session_state["sb_conditions"] = [
+            {"field": "Action", "operator": "==", "value": "BUY"}
+        ]
+    if "sb_connectors" not in st.session_state:
+        st.session_state["sb_connectors"] = []
+
+    conditions = st.session_state["sb_conditions"]
+    connectors = st.session_state["sb_connectors"]
+
+    st.markdown("#### Filter Conditions")
+
+    to_delete = None
+    for i, cond in enumerate(conditions):
+        col_conn, col_field, col_op, col_val, col_del = st.columns([1, 2, 1.2, 1.5, 0.5])
+
+        with col_conn:
+            if i == 0:
+                st.markdown("**WHERE**")
+            else:
+                while len(connectors) < i:
+                    connectors.append("AND")
+                conn_val = connectors[i - 1]
+                connector = st.selectbox(
+                    "",
+                    options=["AND", "OR"],
+                    index=0 if conn_val == "AND" else 1,
+                    key=f"sb_conn_{i}",
+                    label_visibility="collapsed",
+                )
+                connectors[i - 1] = connector
+
+        with col_field:
+            field_opts = list(SCREENER_FIELDS.keys())
+            cur_field = cond.get("field", field_opts[0])
+            field_idx = field_opts.index(cur_field) if cur_field in field_opts else 0
+            selected_field = st.selectbox(
+                "",
+                options=field_opts,
+                index=field_idx,
+                key=f"sb_field_{i}",
+                label_visibility="collapsed",
+            )
+            conditions[i]["field"] = selected_field
+
+        field_info = SCREENER_FIELDS.get(selected_field, {"type": "numeric"})
+        ops = CATEGORICAL_OPS if field_info["type"] == "categorical" else NUMERIC_OPS
+
+        with col_op:
+            cur_op = cond.get("operator", ops[0])
+            op_idx = ops.index(cur_op) if cur_op in ops else 0
+            selected_op = st.selectbox(
+                "",
+                options=ops,
+                index=op_idx,
+                key=f"sb_op_{i}",
+                label_visibility="collapsed",
+            )
+            conditions[i]["operator"] = selected_op
+
+        with col_val:
+            if field_info["type"] == "categorical":
+                cat_vals = field_info.get("values", [])
+                cur_val = cond.get("value", cat_vals[0] if cat_vals else "")
+                val_idx = cat_vals.index(cur_val) if cur_val in cat_vals else 0
+                selected_val = st.selectbox(
+                    "",
+                    options=cat_vals,
+                    index=val_idx,
+                    key=f"sb_val_{i}",
+                    label_visibility="collapsed",
+                )
+            else:
+                hint = field_info.get("hint", "")
+                cur_val = str(cond.get("value", ""))
+                selected_val = st.text_input(
+                    "",
+                    value=cur_val,
+                    placeholder=hint,
+                    key=f"sb_val_{i}",
+                    label_visibility="collapsed",
+                )
+            conditions[i]["value"] = selected_val
+
+        with col_del:
+            if st.button("X", key=f"sb_del_{i}", help="Remove this condition"):
+                to_delete = i
+
+    if to_delete is not None:
+        conditions.pop(to_delete)
+        if connectors:
+            if to_delete > 0:
+                connectors.pop(to_delete - 1)
+            else:
+                connectors.pop(0)
+        st.session_state["sb_conditions"] = conditions
+        st.session_state["sb_connectors"] = connectors
+        st.rerun()
+
+    st.session_state["sb_conditions"] = conditions
+    st.session_state["sb_connectors"] = connectors
+
+    if st.button("+ Add Condition", key="sb_add_cond"):
+        st.session_state["sb_conditions"].append(
+            {"field": "Score", "operator": ">=", "value": "0.3"}
+        )
+        st.session_state["sb_connectors"].append("AND")
+        st.rerun()
+
+    st.markdown("---")
+    col_save, col_cancel = st.columns([1, 1])
+    with col_save:
+        if st.button("Save Screen", type="primary", key="sb_save"):
+            if not screen_name.strip():
+                st.warning("Please enter a name for the screen.")
+            else:
+                screens = load_saved_screens()
+                screens[screen_name.strip()] = {
+                    "conditions": list(conditions),
+                    "connectors": list(connectors),
+                }
+                save_screens_to_file(screens)
+                st.session_state["saved_screens"] = screens
+                st.session_state["active_screen"] = screen_name.strip()
+                st.session_state["show_screen_builder"] = False
+                st.success("Screen saved successfully!")
+                st.rerun()
+    with col_cancel:
+        if st.button("Cancel", key="sb_cancel"):
+            st.session_state["show_screen_builder"] = False
+            st.rerun()
+
+    return conditions, connectors, screen_name.strip()
+
 # =============================================================================
 # Section 7c: Bulk Stock Screener
 # =============================================================================
@@ -2217,11 +2469,52 @@ def main():
                     st.warning("Could not fetch stock list. Try again later.")
 
             st.markdown(f"**Stocks to scan:** {len(screener_stocks)}")
-            screener_btn = st.button(
-                "Run Screener",
-                type="primary",
-                use_container_width=True,
-            )
+
+            # --- Saved Screens ---
+            if "saved_screens" not in st.session_state:
+                st.session_state["saved_screens"] = load_saved_screens()
+            saved_screens = st.session_state["saved_screens"]
+
+            if saved_screens:
+                screen_names = ["None (no filter)"] + list(saved_screens.keys())
+                active_screen = st.session_state.get("active_screen", "None (no filter)")
+                if active_screen not in screen_names:
+                    active_screen = "None (no filter)"
+                chosen_screen = st.selectbox(
+                    "Load Saved Screen",
+                    options=screen_names,
+                    index=screen_names.index(active_screen),
+                    key="chosen_screen_select",
+                )
+                st.session_state["active_screen"] = chosen_screen
+
+                # Delete saved screen option
+                if chosen_screen != "None (no filter)":
+                    if st.button("Delete Screen", key="del_screen"):
+                        del saved_screens[chosen_screen]
+                        save_screens_to_file(saved_screens)
+                        st.session_state["saved_screens"] = saved_screens
+                        st.session_state["active_screen"] = "None (no filter)"
+                        st.rerun()
+
+            col_new, col_run = st.columns([1, 1])
+            with col_new:
+                if st.button("+ New Screen", use_container_width=True, key="open_screen_builder"):
+                    # Reset builder state
+                    st.session_state["show_screen_builder"] = True
+                    st.session_state["sb_conditions"] = [
+                        {"field": "Action", "operator": "==", "value": "BUY"}
+                    ]
+                    st.session_state["sb_connectors"] = []
+                    st.session_state["sb_screen_name"] = ""
+                    st.rerun()
+            with col_run:
+                screener_btn = st.button(
+                    "Run Screener",
+                    type="primary",
+                    use_container_width=True,
+                    key="run_screener_btn",
+                )
         else:
             if ticker:
                 st.markdown(f"**Ticker:** `{ticker}`")
@@ -2341,7 +2634,7 @@ def main():
                 label = comp_name.capitalize()
                 color = "#00c853" if comp_score > 0.1 else "#ff1744" if comp_score < -0.1 else "#ffc107"
                 st.markdown(
-                    f"**{label}** (weight: {weight*100:.0f}%) — "
+                    f"**{label}** (weight: {weight*100:.0f}%) â "
                     f"Score: <span style='color:{color}'>{comp_score:+.3f}</span>",
                     unsafe_allow_html=True,
                 )
@@ -2378,18 +2671,46 @@ def main():
             "Past performance does not guarantee future results. Always do your own research."
         )
     elif screener_mode:
-        if screener_btn:
-            results = run_screener(screener_stocks, market=market)
-            st.session_state["screener_results"] = results
-
-        results = st.session_state.get("screener_results")
-        if results:
-            st.header("Stock Screener Results")
-            render_screener_results(results)
-        elif screener_btn:
-            st.warning("No stocks could be analyzed. Please try again.")
+        # Show screen builder if requested
+        if st.session_state.get("show_screen_builder"):
+            render_screen_builder()
         else:
-            st.info("Select a scope and click **Run Screener** to scan stocks.")
+            if screener_btn:
+                results = run_screener(screener_stocks, market=market)
+                st.session_state["screener_results"] = results
+                # Clear active_screen filter when re-running screener
+                # (keep user's choice)
+
+            results = st.session_state.get("screener_results")
+            if results:
+                # Apply saved screen filter if one is selected
+                active_screen = st.session_state.get("active_screen", "None (no filter)")
+                saved_screens = st.session_state.get("saved_screens", {})
+                filtered_results = results
+
+                if active_screen and active_screen != "None (no filter)" and active_screen in saved_screens:
+                    screen_def = saved_screens[active_screen]
+                    conds = screen_def.get("conditions", [])
+                    conns = screen_def.get("connectors", [])
+                    df_all = pd.DataFrame(results)
+                    df_filtered = apply_screen_filters(df_all, conds, conns)
+                    filtered_results = df_filtered.to_dict("records")
+                    st.header("Stock Screener Results")
+                    st.markdown(
+                        f"**Active Screen:** `{active_screen}` -- "
+                        f"showing {len(filtered_results)} of {len(results)} stocks"
+                    )
+                else:
+                    st.header("Stock Screener Results")
+
+                if filtered_results:
+                    render_screener_results(filtered_results)
+                else:
+                    st.warning("No stocks matched the active screen filter. Try adjusting conditions.")
+            elif screener_btn:
+                st.warning("No stocks could be analyzed. Please try again.")
+            else:
+                st.info("Select a scope and click **Run Screener** to scan stocks. Use **+ New Screen** to build a custom filter.")
     else:
         st.info("Select a stock from the sidebar and click **Analyze Stock** to begin.")
 
