@@ -1739,7 +1739,8 @@ def render_screen_builder():
                 st.session_state["saved_screens"] = screens
                 st.session_state["sb_edit_mode"] = False
                 st.session_state["sb_original_name"] = ""
-                # Set active_screen so sidebar can sync the selectbox on next rerun
+                # Tell the sidebar to sync the selectbox once on the next rerun
+                st.session_state["_sync_to_screen"] = screen_name.strip()
                 st.session_state["active_screen"] = screen_name.strip()
                 # Store conditions directly so the filter always has them
                 st.session_state["active_conds"] = list(conditions)
@@ -2501,15 +2502,16 @@ def main():
 
             if saved_screens:
                 screen_names = ["None (no filter)"] + list(saved_screens.keys())
-                # Sync widget state to active_screen BEFORE rendering the selectbox.
-                # This is allowed here (sidebar runs before main content).
-                _desired = st.session_state.get("active_screen", "None (no filter)")
-                _current_widget = st.session_state.get("chosen_screen_select")
-                if _desired in screen_names and _current_widget != _desired:
-                    # active_screen changed (e.g. new screen just saved) — update widget
-                    st.session_state["chosen_screen_select"] = _desired
-                elif _current_widget not in screen_names:
-                    # widget value is stale / screen was deleted — reset to no-filter
+                # One-shot sync: only update widget when a screen was just saved/edited.
+                # We must NOT override widget state on normal reruns — that would
+                # undo the user's own dropdown selection.
+                _sync_target = st.session_state.get("_sync_to_screen")
+                if _sync_target:
+                    if _sync_target in screen_names:
+                        st.session_state["chosen_screen_select"] = _sync_target
+                    del st.session_state["_sync_to_screen"]
+                elif st.session_state.get("chosen_screen_select") not in screen_names:
+                    # Widget value became invalid (screen deleted) — reset to no-filter
                     st.session_state["chosen_screen_select"] = "None (no filter)"
                 chosen_screen = st.selectbox(
                     "Load Saved Screen",
