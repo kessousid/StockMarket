@@ -1593,8 +1593,13 @@ def apply_screen_filters(df, conditions, connectors):
 
 
 def render_screen_builder():
-    """Render the Create New Screen panel in the main content area."""
-    st.subheader("Create New Screen")
+    """Render the Create / Edit Screen panel in the main content area."""
+    _edit_mode = st.session_state.get("sb_edit_mode", False)
+    _original_name = st.session_state.get("sb_original_name", "")
+    if _edit_mode:
+        st.subheader(f"Edit Screen: {_original_name}")
+    else:
+        st.subheader("Create New Screen")
     st.caption("Build a custom filter using AND / OR conditions on screener metrics.")
 
     screen_name = st.text_input(
@@ -1725,8 +1730,15 @@ def render_screen_builder():
                     "conditions": list(conditions),
                     "connectors": list(connectors),
                 }
+                # If renaming, remove the old entry first
+                _edit_mode = st.session_state.get("sb_edit_mode", False)
+                _orig = st.session_state.get("sb_original_name", "")
+                if _edit_mode and _orig and _orig != screen_name.strip() and _orig in screens:
+                    del screens[_orig]
                 save_screens_to_file(screens)
                 st.session_state["saved_screens"] = screens
+                st.session_state["sb_edit_mode"] = False
+                st.session_state["sb_original_name"] = ""
                 # Set active_screen so sidebar can sync the selectbox on next rerun
                 st.session_state["active_screen"] = screen_name.strip()
                 # Store conditions directly so the filter always has them
@@ -1738,6 +1750,8 @@ def render_screen_builder():
     with col_cancel:
         if st.button("Cancel", key="sb_cancel"):
             st.session_state["show_screen_builder"] = False
+            st.session_state["sb_edit_mode"] = False
+            st.session_state["sb_original_name"] = ""
             st.rerun()
 
     return conditions, connectors, screen_name.strip()
@@ -2506,17 +2520,32 @@ def main():
                     st.session_state["active_conds"] = []
                     st.session_state["active_conns"] = []
 
-                # Delete saved screen option
+                # Edit / Delete buttons for the selected screen
                 if chosen_screen != "None (no filter)":
-                    if st.button("Delete Screen", key="del_screen"):
-                        del saved_screens[chosen_screen]
-                        save_screens_to_file(saved_screens)
-                        st.session_state["saved_screens"] = saved_screens
-                        st.session_state["active_screen"] = "None (no filter)"
-                        st.session_state["active_conds"] = []
-                        st.session_state["active_conns"] = []
-                        st.session_state["chosen_screen_select"] = "None (no filter)"
-                        st.rerun()
+                    _col_edit, _col_del = st.columns([1, 1])
+                    with _col_edit:
+                        if st.button("Edit Screen", key="edit_screen", use_container_width=True):
+                            import copy as _copy
+                            _sdef = saved_screens[chosen_screen]
+                            st.session_state["show_screen_builder"] = True
+                            st.session_state["sb_edit_mode"] = True
+                            st.session_state["sb_original_name"] = chosen_screen
+                            st.session_state["sb_screen_name"] = chosen_screen
+                            st.session_state["sb_conditions"] = _copy.deepcopy(
+                                _sdef.get("conditions", [{"field": "Action", "operator": "==", "value": "BUY"}])
+                            )
+                            st.session_state["sb_connectors"] = list(_sdef.get("connectors", []))
+                            st.rerun()
+                    with _col_del:
+                        if st.button("Delete", key="del_screen", use_container_width=True):
+                            del saved_screens[chosen_screen]
+                            save_screens_to_file(saved_screens)
+                            st.session_state["saved_screens"] = saved_screens
+                            st.session_state["active_screen"] = "None (no filter)"
+                            st.session_state["active_conds"] = []
+                            st.session_state["active_conns"] = []
+                            st.session_state["chosen_screen_select"] = "None (no filter)"
+                            st.rerun()
 
             col_new, col_run = st.columns([1, 1])
             with col_new:
@@ -2739,7 +2768,34 @@ def main():
             elif screener_btn:
                 st.warning("No stocks could be analyzed. Please try again.")
             else:
-                st.info("Select a scope and click **Run Screener** to scan stocks. Use **+ New Screen** to build a custom filter.")
+                _idle_screens = st.session_state.get("saved_screens", {})
+                if not _idle_screens:
+                    _idle_screens = load_saved_screens()
+                if _idle_screens:
+                    st.subheader("Saved Screens")
+                    _active = st.session_state.get("active_screen", "None (no filter)")
+                    for _sname, _sdef in _idle_screens.items():
+                        _is_active = _sname == _active
+                        with st.expander(
+                            ("Active  " if _is_active else "") + _sname,
+                            expanded=_is_active,
+                        ):
+                            _conds = _sdef.get("conditions", [])
+                            _conns = _sdef.get("connectors", [])
+                            if _conds:
+                                _parts = []
+                                for _ci, _c in enumerate(_conds):
+                                    if _ci > 0 and _ci - 1 < len(_conns):
+                                        _parts.append(f"**{_conns[_ci - 1]}**")
+                                    _parts.append(
+                                        f"`{_c.get('field')} {_c.get('operator')} {_c.get('value')}`"
+                                    )
+                                st.markdown("  ".join(_parts))
+                            else:
+                                st.caption("No conditions defined.")
+                    st.info("Select a scope above and click **Run Screener** to apply the active filter.")
+                else:
+                    st.info("Select a scope and click **Run Screener** to scan stocks. Use **+ New Screen** to build a custom filter.")
     else:
         st.info("Select a stock from the sidebar and click **Analyze Stock** to begin.")
 
