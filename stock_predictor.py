@@ -1288,9 +1288,10 @@ def compute_key_metrics(info, annual_income, annual_balance, cashflow):
     """Compute display-only key financial metrics.
 
     Returns a dict of metric values (or None where unavailable).
-    These do NOT affect the Buy/Hold/Sell prediction.
+    These do NOT affect the signal output.
     """
     metrics = {
+        # Existing
         "pe_ratio": None,
         "price_to_book": None,
         "debt_to_equity": None,
@@ -1304,6 +1305,30 @@ def compute_key_metrics(info, annual_income, annual_balance, cashflow):
         "piotroski_score": None,
         "piotroski_details": None,
         "market_cap": None,
+        # Valuation
+        "ps_ratio": None,
+        "ev_ebitda": None,
+        "ev_revenue": None,
+        "forward_pe": None,
+        "enterprise_value": None,
+        # Profitability (raw fractions, e.g. 0.25 = 25%)
+        "gross_margin": None,
+        "operating_margin": None,
+        "net_margin": None,
+        "roa": None,
+        "ebitda_margin": None,
+        # Growth (raw fractions, e.g. 0.12 = 12%)
+        "revenue_growth_yoy": None,
+        "earnings_growth_yoy": None,
+        # Financial Health
+        "quick_ratio": None,
+        "interest_coverage": None,
+        # Dividend (raw fractions)
+        "dividend_yield": None,
+        "payout_ratio": None,
+        # Per Share / Risk
+        "eps": None,
+        "beta": None,
     }
 
     if not info:
@@ -1319,6 +1344,54 @@ def compute_key_metrics(info, annual_income, annual_balance, cashflow):
 
     metrics["current_ratio"] = info.get("currentRatio")
     metrics["market_cap"] = info.get("marketCap")
+
+    # Valuation
+    metrics["ps_ratio"] = info.get("priceToSalesTrailing12Months")
+    metrics["ev_ebitda"] = info.get("enterpriseToEbitda")
+    metrics["ev_revenue"] = info.get("enterpriseToRevenue")
+    metrics["forward_pe"] = info.get("forwardPE")
+    metrics["enterprise_value"] = info.get("enterpriseValue")
+
+    # Profitability
+    metrics["gross_margin"] = info.get("grossMargins")
+    metrics["operating_margin"] = info.get("operatingMargins")
+    metrics["net_margin"] = info.get("profitMargins")
+    metrics["roa"] = info.get("returnOnAssets")
+    metrics["ebitda_margin"] = info.get("ebitdaMargins")
+
+    # Growth
+    metrics["revenue_growth_yoy"] = info.get("revenueGrowth")
+    metrics["earnings_growth_yoy"] = info.get("earningsGrowth")
+
+    # Financial Health
+    metrics["quick_ratio"] = info.get("quickRatio")
+
+    # Dividend
+    dy = info.get("dividendYield") or info.get("trailingAnnualDividendYield")
+    metrics["dividend_yield"] = dy
+    metrics["payout_ratio"] = info.get("payoutRatio")
+
+    # Per Share / Risk
+    metrics["eps"] = info.get("trailingEps")
+    metrics["beta"] = info.get("beta")
+
+    # --- Interest Coverage (EBIT / Interest Expense) from annual income stmt ---
+    try:
+        if annual_income is not None and not annual_income.empty:
+            ebit_row = _safe_get_row(annual_income, ["EBIT", "Operating Income", "OperatingIncome"])
+            interest_row = _safe_get_row(
+                annual_income,
+                ["Interest Expense", "InterestExpense", "Interest Expense Non Operating"]
+            )
+            if ebit_row is not None and interest_row is not None:
+                ebit_val = float(ebit_row.iloc[0])
+                interest_val = float(interest_row.iloc[0])
+                # Interest expense is often stored as a negative number
+                interest_abs = abs(interest_val)
+                if interest_abs > 0:
+                    metrics["interest_coverage"] = round(ebit_val / interest_abs, 2)
+    except Exception:
+        pass
 
     # --- Multi-year ROE ---
     try:
@@ -1497,21 +1570,50 @@ def compute_key_metrics(info, annual_income, annual_balance, cashflow):
 SAVED_SCREENS_FILE = "saved_screens.json"
 
 SCREENER_FIELDS = {
+    # Signal
     "Action":            {"type": "categorical", "values": ["BULLISH", "NEUTRAL", "BEARISH"]},
     "Score":             {"type": "numeric", "hint": "-1.0 to 1.0"},
     "Confidence":        {"type": "numeric", "hint": "0 to 100"},
     "Tech Score":        {"type": "numeric", "hint": "-1.0 to 1.0"},
     "Sentiment Score":   {"type": "numeric", "hint": "-1.0 to 1.0"},
     "Fundamental Score": {"type": "numeric", "hint": "-1.0 to 1.0"},
-    "P/E":               {"type": "numeric", "hint": "e.g. < 25"},
-    "P/B":               {"type": "numeric", "hint": "e.g. < 3"},
-    "ROE":               {"type": "numeric", "hint": "e.g. > 15  (enter as %)"},
-    "ROCE":              {"type": "numeric", "hint": "e.g. > 12  (enter as %)"},
-    "Piotroski":         {"type": "numeric", "hint": "0 to 9"},
-    "D/E":               {"type": "numeric", "hint": "e.g. < 1.0"},
-    "Current Ratio":     {"type": "numeric", "hint": "e.g. > 1.5"},
+    # Price / Size
     "CMP":               {"type": "numeric", "hint": "Current Market Price"},
     "Market Cap":        {"type": "numeric", "hint": "in absolute value"},
+    "52W High":          {"type": "numeric", "hint": "e.g. > 500"},
+    "52W Low":           {"type": "numeric", "hint": "e.g. < 200"},
+    "% from 52W High":   {"type": "numeric", "hint": "e.g. > -10 (negative means below high)"},
+    # Valuation
+    "P/E":               {"type": "numeric", "hint": "e.g. < 25"},
+    "Fwd P/E":           {"type": "numeric", "hint": "e.g. < 20"},
+    "P/B":               {"type": "numeric", "hint": "e.g. < 3"},
+    "P/S":               {"type": "numeric", "hint": "e.g. < 5"},
+    "EV/EBITDA":         {"type": "numeric", "hint": "e.g. < 15"},
+    "EV/Revenue":        {"type": "numeric", "hint": "e.g. < 5"},
+    # Profitability (values in %)
+    "ROE":               {"type": "numeric", "hint": "e.g. > 15  (%)"},
+    "ROCE":              {"type": "numeric", "hint": "e.g. > 12  (%)"},
+    "ROA":               {"type": "numeric", "hint": "e.g. > 8   (%)"},
+    "Gross Margin":      {"type": "numeric", "hint": "e.g. > 30  (%)"},
+    "Operating Margin":  {"type": "numeric", "hint": "e.g. > 15  (%)"},
+    "Net Margin":        {"type": "numeric", "hint": "e.g. > 10  (%)"},
+    "EBITDA Margin":     {"type": "numeric", "hint": "e.g. > 20  (%)"},
+    # Growth (values in %)
+    "Rev Growth YoY":    {"type": "numeric", "hint": "e.g. > 10  (%)"},
+    "EPS Growth YoY":    {"type": "numeric", "hint": "e.g. > 10  (%)"},
+    "EPS":               {"type": "numeric", "hint": "e.g. > 10"},
+    # Financial Health
+    "D/E":               {"type": "numeric", "hint": "e.g. < 1.0"},
+    "Current Ratio":     {"type": "numeric", "hint": "e.g. > 1.5"},
+    "Quick Ratio":       {"type": "numeric", "hint": "e.g. > 1.0"},
+    "Interest Coverage": {"type": "numeric", "hint": "e.g. > 3"},
+    "Piotroski":         {"type": "numeric", "hint": "0 to 9  (e.g. >= 7)"},
+    # Dividend (values in %)
+    "Div Yield":         {"type": "numeric", "hint": "e.g. > 2   (%)"},
+    "Payout Ratio":      {"type": "numeric", "hint": "e.g. < 60  (%)"},
+    # Technical
+    "RSI":               {"type": "numeric", "hint": "e.g. < 40 (oversold) or > 60"},
+    "Beta":              {"type": "numeric", "hint": "e.g. < 1.0 (low risk)"},
 }
 
 NUMERIC_OPS = [">=", ">", "<=", "<", "==", "!="]
@@ -1808,7 +1910,21 @@ def run_screener(stock_dict, market="India"):
             if prediction["status"] != "ok":
                 continue
 
+            # 52-week high/low from price history
+            hist = stock_data.get("history")
+            w52_high = round(float(hist["High"].max()), 2) if hist is not None and not hist.empty else None
+            w52_low  = round(float(hist["Low"].min()),  2) if hist is not None and not hist.empty else None
+            cmp_val  = technical.get("current_price")
+            pct_from_high = (
+                round((cmp_val - w52_high) / w52_high * 100, 1)
+                if cmp_val and w52_high else None
+            )
+
+            def _pct(val):
+                return round(val * 100, 2) if val is not None else None
+
             results.append({
+                # Core
                 "Stock": name,
                 "Ticker": ticker,
                 "Action": prediction["action"],
@@ -1817,17 +1933,44 @@ def run_screener(stock_dict, market="India"):
                 "Tech Score": technical.get("score"),
                 "Sentiment Score": sentiment.get("score"),
                 "Fundamental Score": fundamental.get("score"),
+                # Price / Size
+                "CMP": cmp_val,
+                "Market Cap": key_metrics.get("market_cap"),
+                "52W High": w52_high,
+                "52W Low": w52_low,
+                "% from 52W High": pct_from_high,
+                # Valuation
                 "P/E": key_metrics.get("pe_ratio"),
+                "Fwd P/E": key_metrics.get("forward_pe"),
                 "P/B": key_metrics.get("price_to_book"),
-                "ROE": round(key_metrics.get("roe_latest") * 100, 2)
-                    if key_metrics.get("roe_latest") is not None else None,
-                "ROCE": round(key_metrics.get("roce_latest") * 100, 2)
-                    if key_metrics.get("roce_latest") is not None else None,
-                "Piotroski": key_metrics.get("piotroski_score"),
+                "P/S": key_metrics.get("ps_ratio"),
+                "EV/EBITDA": key_metrics.get("ev_ebitda"),
+                "EV/Revenue": key_metrics.get("ev_revenue"),
+                # Profitability (stored as %)
+                "ROE": _pct(key_metrics.get("roe_latest")),
+                "ROCE": _pct(key_metrics.get("roce_latest")),
+                "ROA": _pct(key_metrics.get("roa")),
+                "Gross Margin": _pct(key_metrics.get("gross_margin")),
+                "Operating Margin": _pct(key_metrics.get("operating_margin")),
+                "Net Margin": _pct(key_metrics.get("net_margin")),
+                "EBITDA Margin": _pct(key_metrics.get("ebitda_margin")),
+                # Growth (stored as %)
+                "Rev Growth YoY": _pct(key_metrics.get("revenue_growth_yoy")),
+                "EPS Growth YoY": _pct(key_metrics.get("earnings_growth_yoy")),
+                # Financial Health
                 "D/E": key_metrics.get("debt_to_equity"),
                 "Current Ratio": key_metrics.get("current_ratio"),
-                "Market Cap": key_metrics.get("market_cap"),
-                "CMP": technical.get("current_price"),
+                "Quick Ratio": key_metrics.get("quick_ratio"),
+                "Interest Coverage": key_metrics.get("interest_coverage"),
+                "Piotroski": key_metrics.get("piotroski_score"),
+                # Dividend (stored as %)
+                "Div Yield": _pct(key_metrics.get("dividend_yield")),
+                "Payout Ratio": _pct(key_metrics.get("payout_ratio")),
+                # Technical
+                "RSI": round(technical.get("rsi_value"), 1) if technical.get("rsi_value") is not None else None,
+                "Beta": key_metrics.get("beta"),
+                # Per Share
+                "EPS": key_metrics.get("eps"),
             })
         except Exception:
             continue  # Skip failed stocks silently
@@ -2086,14 +2229,18 @@ def render_screener_results(results):
     # Sort by confidence descending
     filtered_df = filtered_df.sort_values("Confidence", ascending=False).reset_index(drop=True)
 
-    # Format percentage columns
-    def _fmt_pct(val):
-        if val is None or pd.isna(val):
+    # ---- Shared helpers ----
+    def _fv(val, fmt=".2f", suffix=""):
+        """Format a numeric value safely."""
+        if val is None or (isinstance(val, float) and pd.isna(val)):
             return "N/A"
-        return f"{val * 100:.1f}%"
+        try:
+            return f"{val:{fmt}}{suffix}"
+        except Exception:
+            return "N/A"
 
     def _fmt_mcap(val):
-        if val is None or pd.isna(val):
+        if val is None or (isinstance(val, float) and pd.isna(val)):
             return "N/A"
         if val >= 1e12:
             return f"{val / 1e12:.2f}T"
@@ -2103,42 +2250,113 @@ def render_screener_results(results):
             return f"{val / 1e7:.2f}Cr"
         return f"{val:,.0f}"
 
-    # Build display dataframe
-    display_df = pd.DataFrame({
-        "Stock": filtered_df["Stock"],
-        "Action": filtered_df["Action"],
-        "Confidence (%)": filtered_df["Confidence"],
-        "Score": filtered_df["Score"].apply(lambda x: f"{x:+.3f}" if pd.notna(x) else "N/A"),
-        "CMP": filtered_df["CMP"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "N/A"),
-        "P/E": filtered_df["P/E"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "N/A"),
-        "P/B": filtered_df["P/B"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "N/A"),
-        "ROE": filtered_df["ROE"].apply(
-            lambda x: f"{x:.1f}%" if x is not None and not (isinstance(x, float) and x != x) else "N/A"
-        ),
-        "ROCE": filtered_df["ROCE"].apply(
-            lambda x: f"{x:.1f}%" if x is not None and not (isinstance(x, float) and x != x) else "N/A"
-        ),
-        "D/E": filtered_df["D/E"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "N/A"),
-        "Piotroski": filtered_df["Piotroski"].apply(lambda x: f"{int(x)}/9" if pd.notna(x) else "N/A"),
-        "Market Cap": filtered_df["Market Cap"].apply(_fmt_mcap),
-    })
-
-    # Part C: Data table
-    st.dataframe(
-        display_df,
-        use_container_width=True,
-        height=min(len(display_df) * 38 + 40, 800),
-        column_config={
-            "Confidence (%)": st.column_config.ProgressColumn(
-                "Confidence (%)",
-                min_value=0,
-                max_value=100,
-                format="%.1f%%",
-            ),
-        },
+    tbl_h = min(len(filtered_df) * 38 + 40, 800)
+    conf_col = st.column_config.ProgressColumn(
+        "Confidence (%)", min_value=0, max_value=100, format="%.1f%%"
     )
 
-    st.caption(f"Showing {len(display_df)} of {len(df)} stocks")
+    tab_main, tab_val, tab_prof, tab_growth, tab_health, tab_div, tab_tech = st.tabs([
+        "Overview", "Valuation", "Profitability", "Growth", "Financial Health", "Dividend", "Technical"
+    ])
+
+    # ---- Tab 1: Overview ----
+    with tab_main:
+        t1 = pd.DataFrame({
+            "Stock":          filtered_df["Stock"],
+            "Action":         filtered_df["Action"],
+            "Confidence (%)": filtered_df["Confidence"],
+            "Score":          filtered_df["Score"].apply(lambda x: _fv(x, "+.3f")),
+            "CMP":            filtered_df["CMP"].apply(lambda x: _fv(x, ".2f")),
+            "Market Cap":     filtered_df["Market Cap"].apply(_fmt_mcap),
+            "52W High":       filtered_df["52W High"].apply(lambda x: _fv(x, ".2f")),
+            "52W Low":        filtered_df["52W Low"].apply(lambda x: _fv(x, ".2f")),
+            "% from 52W High":filtered_df["% from 52W High"].apply(lambda x: _fv(x, ".1f", "%")),
+            "Piotroski":      filtered_df["Piotroski"].apply(lambda x: f"{int(x)}/9" if pd.notna(x) and x is not None else "N/A"),
+            "EPS":            filtered_df["EPS"].apply(lambda x: _fv(x, ".2f")),
+        })
+        st.dataframe(t1, use_container_width=True, height=tbl_h,
+                     column_config={"Confidence (%)": conf_col})
+
+    # ---- Tab 2: Valuation ----
+    with tab_val:
+        t2 = pd.DataFrame({
+            "Stock":     filtered_df["Stock"],
+            "CMP":       filtered_df["CMP"].apply(lambda x: _fv(x, ".2f")),
+            "P/E":       filtered_df["P/E"].apply(lambda x: _fv(x, ".2f")),
+            "Fwd P/E":   filtered_df["Fwd P/E"].apply(lambda x: _fv(x, ".2f")),
+            "P/B":       filtered_df["P/B"].apply(lambda x: _fv(x, ".2f")),
+            "P/S":       filtered_df["P/S"].apply(lambda x: _fv(x, ".2f")),
+            "EV/EBITDA": filtered_df["EV/EBITDA"].apply(lambda x: _fv(x, ".2f")),
+            "EV/Revenue":filtered_df["EV/Revenue"].apply(lambda x: _fv(x, ".2f")),
+            "Market Cap":filtered_df["Market Cap"].apply(_fmt_mcap),
+        })
+        st.dataframe(t2, use_container_width=True, height=tbl_h)
+
+    # ---- Tab 3: Profitability ----
+    with tab_prof:
+        t3 = pd.DataFrame({
+            "Stock":           filtered_df["Stock"],
+            "ROE (%)":         filtered_df["ROE"].apply(lambda x: _fv(x, ".1f", "%")),
+            "ROCE (%)":        filtered_df["ROCE"].apply(lambda x: _fv(x, ".1f", "%")),
+            "ROA (%)":         filtered_df["ROA"].apply(lambda x: _fv(x, ".1f", "%")),
+            "Gross Margin (%)":filtered_df["Gross Margin"].apply(lambda x: _fv(x, ".1f", "%")),
+            "Oper Margin (%)": filtered_df["Operating Margin"].apply(lambda x: _fv(x, ".1f", "%")),
+            "Net Margin (%)":  filtered_df["Net Margin"].apply(lambda x: _fv(x, ".1f", "%")),
+            "EBITDA Margin (%)":filtered_df["EBITDA Margin"].apply(lambda x: _fv(x, ".1f", "%")),
+        })
+        st.dataframe(t3, use_container_width=True, height=tbl_h)
+
+    # ---- Tab 4: Growth ----
+    with tab_growth:
+        t4 = pd.DataFrame({
+            "Stock":            filtered_df["Stock"],
+            "Rev Growth YoY (%)":filtered_df["Rev Growth YoY"].apply(lambda x: _fv(x, ".1f", "%")),
+            "EPS Growth YoY (%)":filtered_df["EPS Growth YoY"].apply(lambda x: _fv(x, ".1f", "%")),
+            "EPS":              filtered_df["EPS"].apply(lambda x: _fv(x, ".2f")),
+            "Score":            filtered_df["Score"].apply(lambda x: _fv(x, "+.3f")),
+        })
+        st.dataframe(t4, use_container_width=True, height=tbl_h)
+
+    # ---- Tab 5: Financial Health ----
+    with tab_health:
+        t5 = pd.DataFrame({
+            "Stock":             filtered_df["Stock"],
+            "D/E":               filtered_df["D/E"].apply(lambda x: _fv(x, ".2f")),
+            "Current Ratio":     filtered_df["Current Ratio"].apply(lambda x: _fv(x, ".2f")),
+            "Quick Ratio":       filtered_df["Quick Ratio"].apply(lambda x: _fv(x, ".2f")),
+            "Interest Coverage": filtered_df["Interest Coverage"].apply(lambda x: _fv(x, ".1f")),
+            "Piotroski":         filtered_df["Piotroski"].apply(lambda x: f"{int(x)}/9" if pd.notna(x) and x is not None else "N/A"),
+            "Fundamental Score": filtered_df["Fundamental Score"].apply(lambda x: _fv(x, "+.3f")),
+        })
+        st.dataframe(t5, use_container_width=True, height=tbl_h)
+
+    # ---- Tab 6: Dividend ----
+    with tab_div:
+        t6 = pd.DataFrame({
+            "Stock":         filtered_df["Stock"],
+            "Div Yield (%)": filtered_df["Div Yield"].apply(lambda x: _fv(x, ".2f", "%")),
+            "Payout Ratio (%)":filtered_df["Payout Ratio"].apply(lambda x: _fv(x, ".1f", "%")),
+            "EPS":           filtered_df["EPS"].apply(lambda x: _fv(x, ".2f")),
+            "P/E":           filtered_df["P/E"].apply(lambda x: _fv(x, ".2f")),
+        })
+        st.dataframe(t6, use_container_width=True, height=tbl_h)
+
+    # ---- Tab 7: Technical ----
+    with tab_tech:
+        t7 = pd.DataFrame({
+            "Stock":           filtered_df["Stock"],
+            "CMP":             filtered_df["CMP"].apply(lambda x: _fv(x, ".2f")),
+            "RSI":             filtered_df["RSI"].apply(lambda x: _fv(x, ".1f")),
+            "Beta":            filtered_df["Beta"].apply(lambda x: _fv(x, ".2f")),
+            "52W High":        filtered_df["52W High"].apply(lambda x: _fv(x, ".2f")),
+            "52W Low":         filtered_df["52W Low"].apply(lambda x: _fv(x, ".2f")),
+            "% from 52W High": filtered_df["% from 52W High"].apply(lambda x: _fv(x, ".1f", "%")),
+            "Tech Score":      filtered_df["Tech Score"].apply(lambda x: _fv(x, "+.3f")),
+            "Sentiment Score": filtered_df["Sentiment Score"].apply(lambda x: _fv(x, "+.3f")),
+        })
+        st.dataframe(t7, use_container_width=True, height=tbl_h)
+
+    st.caption(f"Showing {len(filtered_df)} of {len(df)} stocks")
 
 
 def render_component_breakdown(technical, sentiment, fundamental, prediction):
