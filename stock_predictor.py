@@ -1727,7 +1727,12 @@ def render_screen_builder():
                 }
                 save_screens_to_file(screens)
                 st.session_state["saved_screens"] = screens
+                # Force the selectbox widget state to show the new screen
+                st.session_state["chosen_screen_select"] = screen_name.strip()
                 st.session_state["active_screen"] = screen_name.strip()
+                # Store conditions directly so the filter always has them
+                st.session_state["active_conds"] = list(conditions)
+                st.session_state["active_conns"] = list(connectors)
                 st.session_state["show_screen_builder"] = False
                 st.success("Screen saved successfully!")
                 st.rerun()
@@ -2477,16 +2482,27 @@ def main():
 
             if saved_screens:
                 screen_names = ["None (no filter)"] + list(saved_screens.keys())
-                active_screen = st.session_state.get("active_screen", "None (no filter)")
-                if active_screen not in screen_names:
-                    active_screen = "None (no filter)"
+                # Ensure the widget key exists and is valid before rendering
+                if st.session_state.get("chosen_screen_select") not in screen_names:
+                    st.session_state["chosen_screen_select"] = st.session_state.get(
+                        "active_screen", "None (no filter)"
+                    )
+                    if st.session_state["chosen_screen_select"] not in screen_names:
+                        st.session_state["chosen_screen_select"] = "None (no filter)"
                 chosen_screen = st.selectbox(
                     "Load Saved Screen",
                     options=screen_names,
-                    index=screen_names.index(active_screen),
                     key="chosen_screen_select",
                 )
+                # Always keep active_screen and conditions in sync with the dropdown
                 st.session_state["active_screen"] = chosen_screen
+                if chosen_screen != "None (no filter)" and chosen_screen in saved_screens:
+                    screen_def = saved_screens[chosen_screen]
+                    st.session_state["active_conds"] = screen_def.get("conditions", [])
+                    st.session_state["active_conns"] = screen_def.get("connectors", [])
+                else:
+                    st.session_state["active_conds"] = []
+                    st.session_state["active_conns"] = []
 
                 # Delete saved screen option
                 if chosen_screen != "None (no filter)":
@@ -2495,6 +2511,9 @@ def main():
                         save_screens_to_file(saved_screens)
                         st.session_state["saved_screens"] = saved_screens
                         st.session_state["active_screen"] = "None (no filter)"
+                        st.session_state["active_conds"] = []
+                        st.session_state["active_conns"] = []
+                        st.session_state["chosen_screen_select"] = "None (no filter)"
                         st.rerun()
 
             col_new, col_run = st.columns([1, 1])
@@ -2683,22 +2702,30 @@ def main():
 
             results = st.session_state.get("screener_results")
             if results:
-                # Apply saved screen filter if one is selected
+                # Apply screen filter — read conditions stored directly in session state
                 active_screen = st.session_state.get("active_screen", "None (no filter)")
-                saved_screens = st.session_state.get("saved_screens", {})
+                active_conds = st.session_state.get("active_conds", [])
+                active_conns = st.session_state.get("active_conns", [])
                 filtered_results = results
 
-                if active_screen and active_screen != "None (no filter)" and active_screen in saved_screens:
-                    screen_def = saved_screens[active_screen]
-                    conds = screen_def.get("conditions", [])
-                    conns = screen_def.get("connectors", [])
+                if active_screen and active_screen != "None (no filter)" and active_conds:
                     df_all = pd.DataFrame(results)
-                    df_filtered = apply_screen_filters(df_all, conds, conns)
+                    df_filtered = apply_screen_filters(df_all, active_conds, active_conns)
                     filtered_results = df_filtered.to_dict("records")
+                    # Build a human-readable summary of the active conditions
+                    cond_parts = []
+                    for i, cond in enumerate(active_conds):
+                        if i > 0 and i - 1 < len(active_conns):
+                            cond_parts.append(active_conns[i - 1])
+                        cond_parts.append(
+                            f"{cond.get('field')} {cond.get('operator')} {cond.get('value')}"
+                        )
+                    cond_summary = "  |  ".join(cond_parts)
                     st.header("Stock Screener Results")
                     st.markdown(
-                        f"**Active Screen:** `{active_screen}` -- "
-                        f"showing {len(filtered_results)} of {len(results)} stocks"
+                        f"**Active Screen:** `{active_screen}` | "
+                        f"Filter: _{cond_summary}_ | "
+                        f"Showing **{len(filtered_results)}** of {len(results)} stocks"
                     )
                 else:
                     st.header("Stock Screener Results")
@@ -2706,7 +2733,7 @@ def main():
                 if filtered_results:
                     render_screener_results(filtered_results)
                 else:
-                    st.warning("No stocks matched the active screen filter. Try adjusting conditions.")
+                    st.warning("No stocks matched the active screen filter. Try adjusting the conditions.")
             elif screener_btn:
                 st.warning("No stocks could be analyzed. Please try again.")
             else:
