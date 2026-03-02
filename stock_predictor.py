@@ -1,7 +1,8 @@
 """
-Stock Market Prediction Tool (India + US)
-Predicts Buy/Hold/Sell for NSE and US stocks using technical analysis,
+Stock Market Analysis Tool (India + US)
+Provides Bullish/Neutral/Bearish signals for NSE and US stocks using technical analysis,
 news sentiment analysis, and quarterly fundamental analysis.
+FOR EDUCATIONAL PURPOSES ONLY. NOT INVESTMENT ADVICE.
 """
 
 # =============================================================================
@@ -1496,7 +1497,7 @@ def compute_key_metrics(info, annual_income, annual_balance, cashflow):
 SAVED_SCREENS_FILE = "saved_screens.json"
 
 SCREENER_FIELDS = {
-    "Action":            {"type": "categorical", "values": ["BUY", "HOLD", "SELL"]},
+    "Action":            {"type": "categorical", "values": ["BULLISH", "NEUTRAL", "BEARISH"]},
     "Score":             {"type": "numeric", "hint": "-1.0 to 1.0"},
     "Confidence":        {"type": "numeric", "hint": "0 to 100"},
     "Tech Score":        {"type": "numeric", "hint": "-1.0 to 1.0"},
@@ -1611,7 +1612,7 @@ def render_screen_builder():
 
     if "sb_conditions" not in st.session_state:
         st.session_state["sb_conditions"] = [
-            {"field": "Action", "operator": "==", "value": "BUY"}
+            {"field": "Action", "operator": "==", "value": "BULLISH"}
         ]
     if "sb_connectors" not in st.session_state:
         st.session_state["sb_connectors"] = []
@@ -1841,7 +1842,7 @@ def run_screener(stock_dict, market="India"):
 # =============================================================================
 
 def generate_prediction(technical, sentiment, fundamental):
-    """Generate final Buy/Hold/Sell prediction with confidence."""
+    """Generate final Bullish/Neutral/Bearish signal with confidence."""
     components = {}
     weights = {}
 
@@ -1873,13 +1874,13 @@ def generate_prediction(technical, sentiment, fundamental):
     final_score = sum(components[k] * weights[k] for k in components)
     final_score = float(np.clip(final_score, -1, 1))
 
-    # Determine action
+    # Determine signal
     if final_score >= BUY_THRESHOLD:
-        action = "BUY"
+        action = "BULLISH"
     elif final_score <= SELL_THRESHOLD:
-        action = "SELL"
+        action = "BEARISH"
     else:
-        action = "HOLD"
+        action = "NEUTRAL"
 
     # Confidence calculation
     # Base confidence from score magnitude (0-50 points)
@@ -1915,7 +1916,7 @@ def generate_prediction(technical, sentiment, fundamental):
 
 def render_gauge_chart(confidence, action):
     """Render a Plotly gauge chart for confidence level."""
-    color_map = {"BUY": "#00c853", "SELL": "#ff1744", "HOLD": "#ffc107"}
+    color_map = {"BULLISH": "#00c853", "BEARISH": "#ff1744", "NEUTRAL": "#ffc107"}
     bar_color = color_map.get(action, "#ffc107")
 
     fig = go.Figure(go.Indicator(
@@ -1944,7 +1945,7 @@ def render_gauge_chart(confidence, action):
 
 
 def render_key_metrics(metrics):
-    """Render a Key Financial Metrics dashboard section."""
+    """Render a Key Financial Metrics dashboard section (display-only, does not affect signal)."""
     st.subheader("Key Financial Metrics")
 
     def _fmt_ratio(val, pct=False):
@@ -2041,30 +2042,30 @@ def render_screener_results(results):
     df = pd.DataFrame(results)
 
     # Part A: Summary cards
-    buy_count = len(df[df["Action"] == "BUY"])
-    hold_count = len(df[df["Action"] == "HOLD"])
-    sell_count = len(df[df["Action"] == "SELL"])
+    buy_count = len(df[df["Action"] == "BULLISH"])
+    hold_count = len(df[df["Action"] == "NEUTRAL"])
+    sell_count = len(df[df["Action"] == "BEARISH"])
 
     c1, c2, c3 = st.columns(3)
     with c1:
         st.markdown(
             f"<div style='background-color:#e8f5e9;padding:20px;border-radius:10px;text-align:center;'>"
             f"<h2 style='color:#00c853;margin:0;'>{buy_count}</h2>"
-            f"<p style='margin:0;color:#2e7d32;'>stocks rated BUY</p></div>",
+            f"<p style='margin:0;color:#2e7d32;'>stocks signalling BULLISH</p></div>",
             unsafe_allow_html=True,
         )
     with c2:
         st.markdown(
             f"<div style='background-color:#fff8e1;padding:20px;border-radius:10px;text-align:center;'>"
             f"<h2 style='color:#ff8f00;margin:0;'>{hold_count}</h2>"
-            f"<p style='margin:0;color:#f57f17;'>stocks rated HOLD</p></div>",
+            f"<p style='margin:0;color:#f57f17;'>stocks signalling NEUTRAL</p></div>",
             unsafe_allow_html=True,
         )
     with c3:
         st.markdown(
             f"<div style='background-color:#ffebee;padding:20px;border-radius:10px;text-align:center;'>"
             f"<h2 style='color:#ff1744;margin:0;'>{sell_count}</h2>"
-            f"<p style='margin:0;color:#c62828;'>stocks rated SELL</p></div>",
+            f"<p style='margin:0;color:#c62828;'>stocks signalling BEARISH</p></div>",
             unsafe_allow_html=True,
         )
 
@@ -2072,8 +2073,8 @@ def render_screener_results(results):
 
     # Part B: Filter tabs
     filter_action = st.radio(
-        "Filter by Action",
-        options=["All", "BUY", "HOLD", "SELL"],
+        "Filter by Signal",
+        options=["All", "BULLISH", "NEUTRAL", "BEARISH"],
         horizontal=True,
     )
 
@@ -2290,12 +2291,93 @@ def render_price_chart(history, stock_name, market="India"):
 # Section 10: Main App
 # =============================================================================
 
+def _show_disclaimer_modal():
+    """Show a full-page disclaimer that must be acknowledged before using the app."""
+    st.markdown(
+        """
+        <style>
+        .disclaimer-box {
+            border: 2px solid #ff6f00;
+            border-radius: 12px;
+            padding: 30px;
+            background-color: #fffde7;
+            margin-bottom: 20px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.title("Important Disclaimer — Please Read Before Continuing")
+    st.markdown(
+        """
+        <div class="disclaimer-box">
+
+        <h3 style="color:#e65100;">This is an Educational Tool — NOT Financial Advice</h3>
+
+        By clicking <strong>"I Understand and Accept"</strong> below, you confirm that you have read and
+        understood the following:
+
+        <ol>
+          <li><strong>Not a SEBI-Registered Investment Adviser:</strong> This platform and its creator are
+          <u>not registered</u> with the Securities and Exchange Board of India (SEBI) as an Investment Adviser
+          under the SEBI (Investment Advisers) Regulations, 2013.</li>
+
+          <li><strong>Not an SEC-Registered Investment Adviser:</strong> This platform and its creator are
+          <u>not registered</u> with the U.S. Securities and Exchange Commission (SEC) under the Investment
+          Advisers Act of 1940.</li>
+
+          <li><strong>No Buy/Sell/Hold Recommendations:</strong> The signals displayed (Bullish / Neutral /
+          Bearish) are <u>output scores from mathematical models only</u> — they are <strong>NOT</strong>
+          recommendations or advice to buy, sell, or hold any security.</li>
+
+          <li><strong>Educational & Research Purpose Only:</strong> This tool is built to share the creator's
+          personal understanding of publicly available data analysis techniques. It is strictly for learning
+          and research purposes.</li>
+
+          <li><strong>Data Accuracy Not Guaranteed:</strong> Market data is sourced from third-party providers
+          (Yahoo Finance via yfinance). Data may be delayed, inaccurate, incomplete, or unavailable. No
+          warranty is made regarding its accuracy or timeliness.</li>
+
+          <li><strong>Past Performance Is Not Indicative of Future Results:</strong> Technical, sentiment, and
+          fundamental signals are based on historical data and do not predict future market movements.</li>
+
+          <li><strong>Invest at Your Own Risk:</strong> Financial markets carry significant risk of capital
+          loss. Always consult a <u>SEBI-registered Investment Adviser</u> or a <u>licensed financial
+          professional</u> before making any investment decision.</li>
+
+          <li><strong>No Liability:</strong> The creator of this tool bears no responsibility or liability
+          for any financial decisions made based on the output of this platform.</li>
+        </ol>
+
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    col_left, col_btn, col_right = st.columns([2, 2, 2])
+    with col_btn:
+        if st.button(
+            "I Understand and Accept",
+            type="primary",
+            use_container_width=True,
+        ):
+            st.session_state["disclaimer_accepted"] = True
+            st.rerun()
+
+    st.stop()
+
+
 def main():
     st.set_page_config(
-        page_title="Stock Market Predictor",
+        page_title="Stock Market Analysis Tool",
         page_icon="chart_with_upwards_trend",
         layout="wide",
     )
+
+    # Show disclaimer modal on first visit (session-scoped)
+    if not st.session_state.get("disclaimer_accepted"):
+        _show_disclaimer_modal()
 
     # Sidebar
     with st.sidebar:
@@ -2540,7 +2622,7 @@ def main():
                             st.session_state["sb_original_name"] = chosen_screen
                             st.session_state["sb_screen_name"] = chosen_screen
                             st.session_state["sb_conditions"] = _copy.deepcopy(
-                                _sdef.get("conditions", [{"field": "Action", "operator": "==", "value": "BUY"}])
+                                _sdef.get("conditions", [{"field": "Action", "operator": "==", "value": "BULLISH"}])
                             )
                             st.session_state["sb_connectors"] = list(_sdef.get("connectors", []))
                             st.rerun()
@@ -2561,7 +2643,7 @@ def main():
                     # Reset builder state
                     st.session_state["show_screen_builder"] = True
                     st.session_state["sb_conditions"] = [
-                        {"field": "Action", "operator": "==", "value": "BUY"}
+                        {"field": "Action", "operator": "==", "value": "BULLISH"}
                     ]
                     st.session_state["sb_connectors"] = []
                     st.session_state["sb_screen_name"] = ""
@@ -2586,17 +2668,24 @@ def main():
 
         st.markdown("---")
         st.markdown(
-            "**Disclaimer:** This tool is for educational purposes only. "
-            "Do not make investment decisions based solely on this analysis. "
-            "Always consult a qualified financial advisor."
+            "**Disclaimer:** This tool is for **educational purposes only**. "
+            "Signals shown (Bullish/Neutral/Bearish) are model outputs — "
+            "**NOT buy/sell/hold recommendations**. "
+            "The creator is not a SEBI/SEC-registered adviser. "
+            "Data may be inaccurate or delayed. "
+            "Always consult a qualified financial adviser before investing."
         )
 
     # Page title adapts to market
     if market == "India":
-        st.title("Indian Stock Market Prediction Tool")
+        st.title("Indian Stock Market Analysis Tool")
     else:
-        st.title("US Stock Market Prediction Tool")
-    st.caption("Technical Analysis + News Sentiment + Quarterly Fundamentals")
+        st.title("US Stock Market Analysis Tool")
+    st.caption(
+        "Educational Tool — For Research Purposes Only | "
+        "Technical Analysis + News Sentiment + Quarterly Fundamentals | "
+        "NOT Investment Advice"
+    )
 
     # Main content
     if not screener_mode and analyze_btn and ticker:
@@ -2652,9 +2741,9 @@ def main():
         confidence = prediction["confidence"]
         score = prediction["score"]
 
-        # Big colored action label
-        action_colors = {"BUY": "#00c853", "SELL": "#ff1744", "HOLD": "#ffc107"}
-        action_text_colors = {"BUY": "white", "SELL": "white", "HOLD": "black"}
+        # Big colored signal label
+        action_colors = {"BULLISH": "#00c853", "BEARISH": "#ff1744", "NEUTRAL": "#ffc107"}
+        action_text_colors = {"BULLISH": "white", "BEARISH": "white", "NEUTRAL": "black"}
         bg = action_colors.get(action, "#ffc107")
         fg = action_text_colors.get(action, "black")
 
@@ -2698,7 +2787,7 @@ def main():
                 )
             st.markdown("---")
             st.markdown(f"**Final Weighted Score:** {score:+.3f}")
-            st.markdown(f"**Thresholds:** BUY >= +{BUY_THRESHOLD} | SELL <= {SELL_THRESHOLD}")
+            st.markdown(f"**Thresholds:** BULLISH >= +{BUY_THRESHOLD} | BEARISH <= {SELL_THRESHOLD}")
 
         st.markdown("---")
 
@@ -2724,9 +2813,12 @@ def main():
         # Final disclaimer
         st.markdown("---")
         st.warning(
-            "This prediction is generated using automated technical and sentiment analysis. "
-            "It should NOT be used as the sole basis for investment decisions. "
-            "Past performance does not guarantee future results. Always do your own research."
+            "EDUCATIONAL TOOL — NOT FINANCIAL ADVICE: The Bullish/Neutral/Bearish signal above is "
+            "generated by automated mathematical models using publicly available data. "
+            "It is NOT a recommendation to buy, sell, or hold any security. "
+            "The creator is not a SEBI-registered or SEC-registered investment adviser. "
+            "Past performance does not guarantee future results. Data may be delayed or inaccurate. "
+            "Always consult a qualified, licensed financial adviser before making investment decisions."
         )
     elif screener_mode:
         # Show screen builder if requested

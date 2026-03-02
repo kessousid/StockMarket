@@ -1,6 +1,12 @@
-# Stock Market Prediction Tool (India + US)
+# Stock Market Analysis Tool (India + US)
 
-A Streamlit web app that predicts **Buy / Hold / Sell** for Indian (NSE) and US (NYSE, NASDAQ) stocks using technical analysis, news sentiment analysis, and quarterly fundamental analysis.
+> **DISCLAIMER: This tool is for educational purposes only. It is NOT investment advice.
+> The creator is NOT a SEBI or SEC registered investment adviser.
+> Signals shown are mathematical model outputs — NOT buy/sell/hold recommendations.**
+
+A Streamlit web app that shows **Bullish / Neutral / Bearish** technical signals for Indian (NSE) and US (NYSE, NASDAQ) stocks using technical analysis, news sentiment analysis, and quarterly fundamental analysis.
+
+**For educational and research purposes only. Always consult a qualified financial adviser before investing.**
 
 ## Features
 
@@ -86,4 +92,11 @@ StockMarket/
 
 ## Disclaimer
 
-This tool is for **educational purposes only**. Do not make investment decisions based solely on this analysis. Always consult a qualified financial advisor.
+This tool is for **educational purposes only**.
+
+- The creator is **NOT** a SEBI-registered Investment Adviser (India) or SEC-registered Investment Adviser (US).
+- Signals shown (Bullish / Neutral / Bearish) are outputs of mathematical models — they are **NOT** recommendations to buy, sell, or hold any security.
+- Market data is sourced from third-party providers (Yahoo Finance via yfinance) and may be delayed, inaccurate, or incomplete.
+- Past performance does not guarantee future results.
+- **Always consult a qualified, licensed financial adviser before making any investment decision.**
+- The creator bears no liability for any financial decisions made based on this tool's output.
