@@ -1504,8 +1504,8 @@ SCREENER_FIELDS = {
     "Fundamental Score": {"type": "numeric", "hint": "-1.0 to 1.0"},
     "P/E":               {"type": "numeric", "hint": "e.g. < 25"},
     "P/B":               {"type": "numeric", "hint": "e.g. < 3"},
-    "ROE":               {"type": "numeric", "hint": "e.g. > 0.15"},
-    "ROCE":              {"type": "numeric", "hint": "e.g. > 0.12"},
+    "ROE":               {"type": "numeric", "hint": "e.g. > 15  (enter as %)"},
+    "ROCE":              {"type": "numeric", "hint": "e.g. > 12  (enter as %)"},
     "Piotroski":         {"type": "numeric", "hint": "0 to 9"},
     "D/E":               {"type": "numeric", "hint": "e.g. < 1.0"},
     "Current Ratio":     {"type": "numeric", "hint": "e.g. > 1.5"},
@@ -1817,8 +1817,10 @@ def run_screener(stock_dict, market="India"):
                 "Fundamental Score": fundamental.get("score"),
                 "P/E": key_metrics.get("pe_ratio"),
                 "P/B": key_metrics.get("price_to_book"),
-                "ROE": key_metrics.get("roe_latest"),
-                "ROCE": key_metrics.get("roce_latest"),
+                "ROE": round(key_metrics.get("roe_latest") * 100, 2)
+                    if key_metrics.get("roe_latest") is not None else None,
+                "ROCE": round(key_metrics.get("roce_latest") * 100, 2)
+                    if key_metrics.get("roce_latest") is not None else None,
                 "Piotroski": key_metrics.get("piotroski_score"),
                 "D/E": key_metrics.get("debt_to_equity"),
                 "Current Ratio": key_metrics.get("current_ratio"),
@@ -2108,8 +2110,12 @@ def render_screener_results(results):
         "CMP": filtered_df["CMP"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "N/A"),
         "P/E": filtered_df["P/E"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "N/A"),
         "P/B": filtered_df["P/B"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "N/A"),
-        "ROE": filtered_df["ROE"].apply(_fmt_pct),
-        "ROCE": filtered_df["ROCE"].apply(_fmt_pct),
+        "ROE": filtered_df["ROE"].apply(
+            lambda x: f"{x:.1f}%" if x is not None and not (isinstance(x, float) and x != x) else "N/A"
+        ),
+        "ROCE": filtered_df["ROCE"].apply(
+            lambda x: f"{x:.1f}%" if x is not None and not (isinstance(x, float) and x != x) else "N/A"
+        ),
         "D/E": filtered_df["D/E"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "N/A"),
         "Piotroski": filtered_df["Piotroski"].apply(lambda x: f"{int(x)}/9" if pd.notna(x) else "N/A"),
         "Market Cap": filtered_df["Market Cap"].apply(_fmt_mcap),
