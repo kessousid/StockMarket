@@ -788,16 +788,24 @@ def resolve_ticker(query, market="NSE"):
                     return sym, q.get('shortname', sym)
                 elif market == "US" and not "." in sym:
                     return sym, q.get('shortname', sym)
-            sym = quotes[0]['symbol']
-            return sym, quotes[0].get('shortname', sym)
     except Exception:
         pass
 
     # 3. Ultimate Fallback (assume what user entered is a valid symbol)
     if market == "NSE":
+        # Block known US stocks
+        for sector, stocks in US_STOCK_SECTORS.items():
+            if query_upper in stocks.values() or query_upper in [n.upper() for n in stocks.keys()]:
+                return None, None
+        
         ticker = query_upper if query_upper.endswith(".NS") else f"{query_upper}.NS"
         return ticker, query_upper.replace(".NS", "")
     else:
+        # Block known India stocks
+        for stocks in [NIFTY_50, NIFTY_NEXT_50, MIDCAP_STOCKS, SMALLCAP_STOCKS]:
+            if query_upper in [t.replace(".NS", "") for t in stocks.values()] or query_upper in [n.upper() for n in stocks.keys()]:
+                return None, None
+                
         return query_upper, query_upper
 
 def get_stock_sector(info):
@@ -2742,14 +2750,18 @@ def main():
                         stock_dict = fetch_nasdaq_stocks()
 
                 if not stock_dict:
-                    st.warning(f"Could not fetch {index_name} constituents. Try again later.")
-                    ticker = None
-                    stock_name = None
-                else:
-                    stock_names = sorted(stock_dict.keys())
-                    selected_stock = st.selectbox("Select Stock", options=stock_names)
-                    ticker = stock_dict[selected_stock]
-                    stock_name = selected_stock
+                    st.warning(f"Could not fetch {index_name} constituents. Showing curated US stocks instead.")
+                    all_stocks = {}
+                    for cat_dict in US_STOCK_SECTORS.values():
+                        for n, t in cat_dict.items():
+                            if t not in all_stocks.values():
+                                all_stocks[n] = t
+                    stock_dict = all_stocks
+                
+                stock_names = sorted(stock_dict.keys())
+                selected_stock = st.selectbox("Select Stock", options=stock_names)
+                ticker = stock_dict[selected_stock]
+                stock_name = selected_stock
             elif input_mode == "Browse by Sector":
                 sector_name = st.selectbox("Select Sector", options=sorted(US_STOCK_SECTORS.keys()))
                 sector_stocks = US_STOCK_SECTORS[sector_name]
@@ -2769,6 +2781,7 @@ def main():
                 else:
                     ticker = None
                     stock_name = None
+            else:
                 # Stock Screener mode
                 ticker = None
                 stock_name = None
@@ -2929,7 +2942,6 @@ def main():
                 "Analyze Stock",
                 type="primary",
                 use_container_width=True,
-                disabled=(ticker is None),
             )
 
         st.markdown("---")
