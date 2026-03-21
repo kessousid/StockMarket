@@ -749,6 +749,57 @@ US_STOCK_SECTORS = {
 # Section 3: Helper Functions
 # =============================================================================
 
+def resolve_ticker(query, market="NSE"):
+    query_upper = query.upper().strip()
+    
+    # 1. Exact or partial match in pre-defined dictionaries
+    if market == "NSE":
+        for stocks in [NIFTY_50, NIFTY_NEXT_50, MIDCAP_STOCKS, SMALLCAP_STOCKS]:
+            for name, ticker in stocks.items():
+                if query_upper == name.upper() or query_upper == ticker.upper().replace(".NS", ""):
+                    return ticker, name
+        for sector, stocks in STOCK_SECTORS.items():
+            for name, ticker in stocks.items():
+                if query_upper == name.upper() or query_upper == ticker.upper().replace(".NS", ""):
+                    return ticker, name
+        for stocks in [NIFTY_50, NIFTY_NEXT_50, MIDCAP_STOCKS, SMALLCAP_STOCKS]:
+            for name, ticker in stocks.items():
+                if query_upper in name.upper():
+                    return ticker, name
+    else:
+        for sector, stocks in US_STOCK_SECTORS.items():
+            for name, ticker in stocks.items():
+                if query_upper == name.upper() or query_upper == ticker.upper():
+                    return ticker, name
+        for sector, stocks in US_STOCK_SECTORS.items():
+            for name, ticker in stocks.items():
+                if query_upper in name.upper():
+                    return ticker, name
+
+    # 2. Yahoo Finance Search API as fallback
+    try:
+        url = f"https://query2.finance.yahoo.com/v1/finance/search?q={quote_plus(query)}"
+        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5).json()
+        quotes = res.get('quotes', [])
+        if quotes:
+            for q in quotes:
+                sym = q['symbol']
+                if market == "NSE" and sym.endswith(".NS"):
+                    return sym, q.get('shortname', sym)
+                elif market == "US" and not "." in sym:
+                    return sym, q.get('shortname', sym)
+            sym = quotes[0]['symbol']
+            return sym, quotes[0].get('shortname', sym)
+    except Exception:
+        pass
+
+    # 3. Ultimate Fallback (assume what user entered is a valid symbol)
+    if market == "NSE":
+        ticker = query_upper if query_upper.endswith(".NS") else f"{query_upper}.NS"
+        return ticker, query_upper.replace(".NS", "")
+    else:
+        return query_upper, query_upper
+
 def get_stock_sector(info):
     """Extract sector from yfinance info dict."""
     return info.get("sector") or info.get("industry") or "General"
@@ -2649,15 +2700,14 @@ def main():
                 ticker = sector_stocks[selected_stock]
                 stock_name = selected_stock
             elif input_mode == "Enter Custom Ticker":
-                st.markdown("Enter any NSE stock symbol (e.g. `ZOMATO`, `IRCTC`, `PAYTM`)")
+                st.markdown("Enter any NSE stock symbol or company name (e.g. `ZOMATO`, `Tata Motors`)")
                 custom_ticker = st.text_input(
-                    "NSE Symbol",
+                    "NSE Symbol/Name",
                     value="",
-                    placeholder="e.g. ZOMATO",
-                ).strip().upper()
+                    placeholder="e.g. ZOMATO or Tata Motors",
+                ).strip()
                 if custom_ticker:
-                    ticker = custom_ticker if custom_ticker.endswith(".NS") else f"{custom_ticker}.NS"
-                    stock_name = custom_ticker.replace(".NS", "")
+                    ticker, stock_name = resolve_ticker(custom_ticker, market="NSE")
                 else:
                     ticker = None
                     stock_name = None
@@ -2708,19 +2758,17 @@ def main():
                 ticker = sector_stocks[selected_stock]
                 stock_name = selected_stock
             elif input_mode == "Enter Custom Ticker":
-                st.markdown("Enter any US stock ticker (e.g. `AAPL`, `MSFT`, `TSLA`)")
+                st.markdown("Enter any US stock ticker or company name (e.g. `AAPL`, `Apple`)")
                 custom_ticker = st.text_input(
-                    "US Ticker",
+                    "US Ticker/Name",
                     value="",
-                    placeholder="e.g. AAPL",
-                ).strip().upper()
+                    placeholder="e.g. AAPL or Apple Inc",
+                ).strip()
                 if custom_ticker:
-                    ticker = custom_ticker
-                    stock_name = custom_ticker
+                    ticker, stock_name = resolve_ticker(custom_ticker, market="US")
                 else:
                     ticker = None
                     stock_name = None
-            else:
                 # Stock Screener mode
                 ticker = None
                 stock_name = None
