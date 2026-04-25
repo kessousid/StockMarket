@@ -2102,9 +2102,83 @@ def compute_key_metrics(info, annual_income, annual_balance, cashflow):
 SAVED_SCREENS_FILE = os.path.join(_DATA_DIR, "saved_screens.json")
 WATCHLISTS_FILE    = os.path.join(_DATA_DIR, "watchlists.json")
 
+# =============================================================================
+# GitHub Gist persistence — survives Railway deployments
+# Set GITHUB_GIST_TOKEN env var (GitHub PAT with 'gist' scope) to enable.
+# The app auto-creates a private gist on first run and reads/writes to it.
+# =============================================================================
+
+_GIST_DESC = "StockMarket-App-Data"
+_GIST_HEADERS = lambda token: {
+    "Authorization": f"token {token}",
+    "Accept": "application/vnd.github.v3+json",
+}
+
+@st.cache_resource(show_spinner=False)
+def _get_or_create_gist():
+    """Find existing app gist or create one. Result cached for app lifetime."""
+    token = os.environ.get("GITHUB_GIST_TOKEN", "").strip()
+    if not token:
+        return None
+    try:
+        hdrs = _GIST_HEADERS(token)
+        # Search existing gists
+        resp = requests.get("https://api.github.com/gists", headers=hdrs, timeout=6)
+        for g in resp.json() if isinstance(resp.json(), list) else []:
+            if g.get("description") == _GIST_DESC:
+                return g["id"]
+        # Create new private gist
+        payload = {
+            "description": _GIST_DESC,
+            "public": False,
+            "files": {
+                "watchlists.json":    {"content": "{}"},
+                "saved_screens.json": {"content": "{}"},
+            },
+        }
+        r = requests.post("https://api.github.com/gists", headers=hdrs,
+                          json=payload, timeout=6)
+        return r.json().get("id")
+    except Exception:
+        return None
+
+
+def _gist_load(filename):
+    """Read a JSON file from the persistent Gist. Returns None if unavailable."""
+    token = os.environ.get("GITHUB_GIST_TOKEN", "").strip()
+    gist_id = _get_or_create_gist()
+    if not token or not gist_id:
+        return None
+    try:
+        hdrs = _GIST_HEADERS(token)
+        r = requests.get(f"https://api.github.com/gists/{gist_id}",
+                         headers=hdrs, timeout=6)
+        content = r.json().get("files", {}).get(filename, {}).get("content", "")
+        return json.loads(content) if content else {}
+    except Exception:
+        return None
+
+
+def _gist_save(filename, data):
+    """Write a JSON file to the persistent Gist. Falls back silently."""
+    token = os.environ.get("GITHUB_GIST_TOKEN", "").strip()
+    gist_id = _get_or_create_gist()
+    if not token or not gist_id:
+        return
+    try:
+        hdrs = _GIST_HEADERS(token)
+        payload = {"files": {filename: {"content": json.dumps(data, indent=2)}}}
+        requests.patch(f"https://api.github.com/gists/{gist_id}",
+                       headers=hdrs, json=payload, timeout=6)
+    except Exception:
+        pass
+
 
 def load_watchlists():
-    """Load user-defined watchlists from JSON. Returns {name: {stock_name: ticker}}."""
+    """Load watchlists — Gist first, local file fallback."""
+    data = _gist_load("watchlists.json")
+    if data is not None:
+        return data
     try:
         if os.path.exists(WATCHLISTS_FILE):
             with open(WATCHLISTS_FILE, "r") as f:
@@ -2115,7 +2189,8 @@ def load_watchlists():
 
 
 def save_watchlists(watchlists):
-    """Persist watchlists dict to JSON file."""
+    """Persist watchlists — Gist first, local file fallback."""
+    _gist_save("watchlists.json", watchlists)
     try:
         with open(WATCHLISTS_FILE, "w") as f:
             json.dump(watchlists, f, indent=2)
@@ -2175,7 +2250,10 @@ CATEGORICAL_OPS = ["==", "!="]
 
 
 def load_saved_screens():
-    """Load saved screens from JSON file."""
+    """Load saved screens — Gist first, local file fallback."""
+    data = _gist_load("saved_screens.json")
+    if data is not None:
+        return data
     try:
         if os.path.exists(SAVED_SCREENS_FILE):
             with open(SAVED_SCREENS_FILE, "r") as f:
@@ -2186,7 +2264,8 @@ def load_saved_screens():
 
 
 def save_screens_to_file(screens):
-    """Persist screens dict to JSON file."""
+    """Persist saved screens — Gist first, local file fallback."""
+    _gist_save("saved_screens.json", screens)
     try:
         with open(SAVED_SCREENS_FILE, "w") as f:
             json.dump(screens, f, indent=2)
