@@ -935,6 +935,38 @@ def fetch_stock_data(ticker):
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
+def fetch_nse_index_constituents(index_key):
+    """Fetch live NSE index constituents from niftyindices.com (updated daily by NSE)."""
+    urls = {
+        "midcap150":   "https://www.niftyindices.com/IndexConstituents/ind_niftymidcap150list.csv",
+        "smallcap250": "https://www.niftyindices.com/IndexConstituents/ind_niftysmallcap250list.csv",
+        "microcap250": "https://www.niftyindices.com/IndexConstituents/ind_niftymicrocap250list.csv",
+        "nifty500":    "https://www.niftyindices.com/IndexConstituents/ind_nifty500list.csv",
+        "niftynext50": "https://www.niftyindices.com/IndexConstituents/ind_niftynext50list.csv",
+    }
+    url = urls.get(index_key)
+    if not url:
+        return {}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Referer": "https://www.niftyindices.com/",
+    }
+    try:
+        resp = requests.get(url, headers=headers, timeout=12)
+        resp.raise_for_status()
+        df = pd.read_csv(io.StringIO(resp.text))
+        stocks = {}
+        for _, row in df.iterrows():
+            symbol = str(row.get("Symbol", "")).strip()
+            name = str(row.get("Company Name", "")).strip()
+            if symbol and name and symbol != "nan":
+                stocks[name] = f"{symbol}.NS"
+        return stocks
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
 def fetch_all_nse_stocks():
     """Fetch complete list of NSE-listed equities from official NSE CSV."""
     url = "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
@@ -1071,6 +1103,51 @@ def fetch_news_headlines(stock_name, sector, market="India"):
             results[category] = []
 
     return results
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_global_macro_news(market="India"):
+    """Fetch global macro-economic news: Fed, geopolitics, commodities, currencies."""
+    if market == "India":
+        queries = [
+            "US Federal Reserve interest rate economy 2025",
+            "India economy RBI GDP growth inflation",
+            "global stock market crash rally recession",
+            "crude oil gold silver commodity prices",
+            "US China trade war tariffs geopolitics",
+            "dollar rupee currency exchange rate",
+            "FII DII foreign institutional investor India",
+            "Middle East Russia Ukraine war global impact",
+        ]
+        hl, gl, ceid = "en-IN", "IN", "IN:en"
+    else:
+        queries = [
+            "Federal Reserve interest rate inflation economy",
+            "US GDP growth recession 2025",
+            "global stock market outlook S&P",
+            "crude oil OPEC commodity prices",
+            "China economy trade war geopolitics",
+            "dollar currency forex exchange",
+            "earnings season tech AI sector",
+            "geopolitical risk Middle East Europe",
+        ]
+        hl, gl, ceid = "en-US", "US", "US:en"
+
+    all_headlines = []
+    for query in queries:
+        try:
+            url = f"https://news.google.com/rss/search?q={quote_plus(query)}&hl={hl}&gl={gl}&ceid={ceid}"
+            feed = feedparser.parse(url)
+            for entry in feed.entries[:4]:
+                all_headlines.append({
+                    "title": entry.get("title", ""),
+                    "published": entry.get("published", ""),
+                    "source": entry.get("source", {}).get("title", "Unknown"),
+                    "category": "macro",
+                })
+        except Exception:
+            continue
+    return all_headlines
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -2468,6 +2545,279 @@ def generate_prediction(technical, sentiment, fundamental, oi_data=None):
 
 
 # =============================================================================
+# Section 8b: Daily Trade Picks & Swing Trade Scanner
+# =============================================================================
+
+def _swing_trade_score(technical, fundamental, sentiment, macro_adj):
+    """Score a stock specifically for swing/intraday trade suitability (0–100)."""
+    if technical.get("status") != "ok":
+        return 0, "No Data", []
+
+    rsi = technical.get("rsi_value", 50)
+    macd_hist = technical.get("macd_hist", 0)
+    bb_pct = technical.get("bb_pct", 50)   # 0=lower band, 100=upper band
+    vol_ratio = technical.get("volume_ratio", 1.0)
+    obv_signal = technical.get("obv_signal", 0)
+    momentum = technical.get("momentum_signal", 0)
+    w52_pct = technical.get("w52_pct", 50)
+    score_raw = technical.get("score", 0)
+    current_price = technical.get("current_price", 0)
+    sma_long = technical.get("sma_long", current_price)
+
+    reasons = []
+    points = 0
+
+    # --- Setup type detection ---
+    # Momentum breakout: RSI 55-68, MACD positive, volume surge, near 52w high
+    is_momentum = (55 <= rsi <= 68) and macd_hist > 0 and vol_ratio >= 1.5 and w52_pct >= 55
+    # Pullback entry: RSI 33-48, price near BB lower band, MACD improving
+    is_pullback = (33 <= rsi <= 48) and bb_pct <= 35 and score_raw >= 0
+    # Reversal: RSI < 32 and OBV showing accumulation
+    is_reversal = rsi <= 32 and obv_signal > 0.1
+    # Bearish breakdown: RSI > 68, MACD negative, price below SMA
+    is_bearish = score_raw <= -0.2 and rsi >= 60 and macd_hist < 0
+
+    if is_momentum:
+        setup = "Momentum Breakout"
+        points += 35
+        reasons.append(f"RSI {rsi:.0f} in momentum zone")
+    elif is_pullback:
+        setup = "Pullback Entry"
+        points += 30
+        reasons.append(f"Pullback to BB lower ({bb_pct:.0f}%), RSI {rsi:.0f}")
+    elif is_reversal:
+        setup = "Oversold Reversal"
+        points += 28
+        reasons.append(f"Oversold RSI {rsi:.0f} + OBV accumulation")
+    elif is_bearish:
+        setup = "Bearish Breakdown"
+        points += 25
+        reasons.append(f"RSI {rsi:.0f} overbought, MACD negative")
+    else:
+        setup = "Neutral"
+        points += max(0, int(abs(score_raw) * 20))
+
+    # Volume confirmation (0–20 pts)
+    if vol_ratio >= 3.0:
+        points += 20; reasons.append(f"Volume surge {vol_ratio:.1f}x avg")
+    elif vol_ratio >= 2.0:
+        points += 14; reasons.append(f"High volume {vol_ratio:.1f}x avg")
+    elif vol_ratio >= 1.5:
+        points += 8; reasons.append(f"Above-avg volume {vol_ratio:.1f}x")
+
+    # MACD crossover confirmation (0–15 pts)
+    macd_cross = technical.get("macd_crossover", "")
+    if macd_cross == "Bullish" and setup in ("Momentum Breakout", "Pullback Entry", "Oversold Reversal"):
+        points += 15; reasons.append("MACD bullish crossover")
+    elif macd_cross == "Bearish" and setup == "Bearish Breakdown":
+        points += 15; reasons.append("MACD bearish crossover")
+
+    # Fundamental quality bonus (0–10 pts)
+    if fundamental.get("status") == "ok":
+        f_score = fundamental.get("score", 0)
+        if f_score > 0.3:
+            points += 10; reasons.append("Strong fundamentals")
+        elif f_score > 0.1:
+            points += 5
+
+    # Sentiment alignment (0–10 pts)
+    if sentiment.get("status") == "ok":
+        s_score = sentiment.get("score", 0)
+        if (s_score > 0.1 and setup != "Bearish Breakdown") or (s_score < -0.1 and setup == "Bearish Breakdown"):
+            points += 10; reasons.append("News sentiment aligned")
+
+    # Global macro adjustment (−10 to +10)
+    points += int(macro_adj * 10)
+    if macro_adj > 0.1:
+        reasons.append("Positive global macro backdrop")
+    elif macro_adj < -0.1:
+        reasons.append("Cautious — negative macro backdrop")
+
+    # Price above SMA50 for longs (−5 if below, long setups only)
+    if setup not in ("Bearish Breakdown",) and sma_long and current_price < sma_long * 0.97:
+        points -= 5
+
+    return min(max(points, 0), 100), setup, reasons
+
+
+def run_daily_picks(stocks_dict, market="India", max_scan=300):
+    """Scan universe for today's best swing/intraday trade setups."""
+    # Fetch global macro news once for the full scan
+    macro_headlines = fetch_global_macro_news(market)
+    macro_sentiment_score = 0.0
+    if macro_headlines:
+        vader = _get_vader_analyzer()
+        macro_scores = [vader.polarity_scores(h["title"])["compound"] for h in macro_headlines if h.get("title")]
+        macro_sentiment_score = float(np.mean(macro_scores)) if macro_scores else 0.0
+
+    stocks_list = list(stocks_dict.items())[:max_scan]
+    results = []
+
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    total = len(stocks_list)
+
+    for i, (name, ticker) in enumerate(stocks_list):
+        progress_bar.progress((i + 1) / total)
+        status_text.text(f"Scanning {i+1}/{total}: {name}")
+        try:
+            stock_data = fetch_stock_data(ticker)
+            if stock_data["status"] != "ok":
+                continue
+            hist = stock_data.get("history")
+            if hist is None or len(hist) < 50:
+                continue
+
+            technical = calculate_technical_indicators(hist)
+            if technical.get("status") != "ok":
+                continue
+
+            info = stock_data.get("info", {})
+            fundamental = analyze_fundamentals(
+                stock_data.get("quarterly_income"), info,
+                balance_sheet_df=stock_data.get("quarterly_balance"),
+            )
+
+            # Use cached news for speed (no per-stock news fetch in daily scan)
+            sentiment = {"status": "insufficient_data"}
+
+            swing_score, setup, reasons = _swing_trade_score(
+                technical, fundamental, sentiment, macro_sentiment_score
+            )
+            if swing_score < 20:
+                continue  # Skip low-quality setups
+
+            price = technical.get("current_price", 0)
+            trade_lvl = calculate_trade_levels(technical, "BULLISH" if setup != "Bearish Breakdown" else "BEARISH")
+
+            results.append({
+                "Stock": name,
+                "Ticker": ticker,
+                "Setup": setup,
+                "Swing Score": swing_score,
+                "Price": round(price, 2),
+                "RSI": round(technical.get("rsi_value", 0), 1),
+                "MACD": technical.get("macd_crossover", ""),
+                "Vol Ratio": round(technical.get("volume_ratio", 1), 2),
+                "BB%": technical.get("bb_pct", 50),
+                "52W%": technical.get("w52_pct", 50),
+                "Tech Score": round(technical.get("score", 0), 3),
+                "Target": trade_lvl["target1"] if trade_lvl else None,
+                "Stop Loss": trade_lvl["stop_loss"] if trade_lvl else None,
+                "R:R": trade_lvl["risk_reward1"] if trade_lvl else None,
+                "Reasons": " | ".join(reasons),
+            })
+        except Exception:
+            continue
+
+    progress_bar.empty()
+    status_text.empty()
+
+    results.sort(key=lambda x: x["Swing Score"], reverse=True)
+    return results, macro_sentiment_score, macro_headlines
+
+
+def render_daily_picks(results, macro_score, macro_headlines, market="India"):
+    """Render daily trade picks with macro context."""
+    # Global macro sentiment banner
+    macro_color = "#00c853" if macro_score > 0.05 else "#ff1744" if macro_score < -0.05 else "#ff8f00"
+    macro_label = "Positive" if macro_score > 0.05 else "Negative" if macro_score < -0.05 else "Neutral"
+    st.markdown(
+        f"<div style='background:#f5f5f5;border-left:4px solid {macro_color};padding:10px 16px;"
+        f"border-radius:4px;margin-bottom:16px;'>"
+        f"<b>Global Macro Sentiment:</b> <span style='color:{macro_color};font-weight:700;'>{macro_label}</span>"
+        f" &nbsp;|&nbsp; Score: {macro_score:+.3f} &nbsp;|&nbsp; Based on {len(macro_headlines)} global news items"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    if not results:
+        st.warning("No qualifying trade setups found in today's scan.")
+        return
+
+    df = pd.DataFrame(results)
+
+    # Summary by setup type
+    setup_counts = df["Setup"].value_counts()
+    cols = st.columns(len(setup_counts))
+    setup_colors = {
+        "Momentum Breakout": "#1976d2",
+        "Pullback Entry": "#00c853",
+        "Oversold Reversal": "#ff9800",
+        "Bearish Breakdown": "#ff1744",
+        "Neutral": "#9e9e9e",
+    }
+    for col, (setup, count) in zip(cols, setup_counts.items()):
+        color = setup_colors.get(setup, "#9e9e9e")
+        col.markdown(
+            f"<div style='background:{color}15;border:1px solid {color};border-radius:8px;"
+            f"padding:10px;text-align:center;'>"
+            f"<b style='color:{color};font-size:1.4em;'>{count}</b><br>"
+            f"<span style='font-size:0.8em;'>{setup}</span></div>",
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("")
+
+    # Setup filter
+    setup_options = ["All"] + df["Setup"].unique().tolist()
+    selected_setup = st.radio("Filter by Setup", setup_options, horizontal=True)
+    if selected_setup != "All":
+        df = df[df["Setup"] == selected_setup]
+
+    def _fv(val, fmt=".2f", suffix=""):
+        if val is None or (isinstance(val, float) and pd.isna(val)):
+            return "N/A"
+        try:
+            return f"{val:{fmt}}{suffix}"
+        except Exception:
+            return "N/A"
+
+    display_df = pd.DataFrame({
+        "Stock": df["Stock"],
+        "Setup": df["Setup"],
+        "Swing Score": df["Swing Score"],
+        "Price": df["Price"].apply(lambda x: _fv(x, ".2f")),
+        "RSI": df["RSI"].apply(lambda x: _fv(x, ".1f")),
+        "MACD": df["MACD"],
+        "Vol Ratio": df["Vol Ratio"].apply(lambda x: _fv(x, ".2f", "x")),
+        "BB%": df["BB%"].apply(lambda x: _fv(x, ".0f", "%")),
+        "Target": df["Target"].apply(lambda x: _fv(x, ".2f")),
+        "Stop Loss": df["Stop Loss"].apply(lambda x: _fv(x, ".2f")),
+        "R:R": df["R:R"].apply(lambda x: _fv(x, ".2f", "x")),
+        "Why": df["Reasons"],
+    })
+
+    tbl_h = min(len(display_df) * 38 + 50, 800)
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        height=tbl_h,
+        column_config={
+            "Swing Score": st.column_config.ProgressColumn(
+                "Swing Score", min_value=0, max_value=100, format="%d"
+            )
+        },
+    )
+    st.caption(f"Showing {len(display_df)} setups | Sorted by Swing Score descending")
+
+    # Global macro headlines expander
+    if macro_headlines:
+        with st.expander(f"Global Macro News ({len(macro_headlines)} headlines)"):
+            vader = _get_vader_analyzer()
+            for h in macro_headlines[:20]:
+                title = h.get("title", "")
+                source = h.get("source", "")
+                sc = vader.polarity_scores(title)["compound"]
+                c = "#00c853" if sc > 0.1 else "#ff1744" if sc < -0.1 else "#888"
+                st.markdown(
+                    f"<span style='color:{c}'>[{sc:+.2f}]</span> {title} "
+                    f"<span style='color:gray;font-size:0.82em'>— {source}</span>",
+                    unsafe_allow_html=True,
+                )
+
+
+# =============================================================================
 # Section 9: UI Helpers
 # =============================================================================
 
@@ -3158,9 +3508,17 @@ def main():
             st.header("Indian Stock Market")
             input_mode = st.radio(
                 "How do you want to select a stock?",
-                options=["Browse by Category", "Browse by Sector", "Enter Custom Ticker", "Stock Screener"],
+                options=["Browse by Category", "Browse by Sector", "Enter Custom Ticker", "Stock Screener", "Daily Trade Picks"],
                 horizontal=True,
             )
+
+            # Map category names to NSE index keys for live fetching
+            _NSE_INDEX_KEY = {
+                "Nifty Next 50": "niftynext50",
+                "Mid Cap": "midcap150",
+                "Small Cap": "smallcap250",
+                "Micro Cap": "microcap250",
+            }
 
             if input_mode == "Browse by Category":
                 category_options = list(STOCK_CATEGORIES.keys()) + ["All NSE Stocks (~2,600)"]
@@ -3179,6 +3537,15 @@ def main():
                                 if t not in all_stocks.values():
                                     all_stocks[n] = t
                         stock_dict = all_stocks
+                elif category in _NSE_INDEX_KEY:
+                    idx_key = _NSE_INDEX_KEY[category]
+                    with st.spinner(f"Fetching live NSE {category} constituents..."):
+                        stock_dict = fetch_nse_index_constituents(idx_key)
+                    if not stock_dict:
+                        st.caption("Live fetch failed — using curated list as fallback.")
+                        stock_dict = STOCK_CATEGORIES[category]
+                    else:
+                        st.caption(f"Live data: {len(stock_dict)} stocks from NSE")
                 else:
                     stock_dict = STOCK_CATEGORIES[category]
                 stock_names = sorted(stock_dict.keys())
@@ -3213,6 +3580,9 @@ def main():
                 else:
                     ticker = None
                     stock_name = None
+            elif input_mode == "Daily Trade Picks":
+                ticker = None
+                stock_name = None
             else:
                 # Stock Screener mode
                 ticker = None
@@ -3284,18 +3654,28 @@ def main():
 
         # Screener mode variables
         screener_mode = input_mode == "Stock Screener"
+        daily_picks_mode = (market == "India" and input_mode == "Daily Trade Picks")
         screener_stocks = {}
         screener_btn = False
         analyze_btn = False
+        daily_picks_btn = False
 
         if screener_mode:
             if market == "India":
                 scope_options = (
-                    ["All NSE Stocks", "Curated Stocks (277)"]
+                    ["All NSE Stocks", "Nifty 500 (live)", "Nifty Midcap 150 (live)",
+                     "Nifty Smallcap 250 (live)", "Nifty Microcap 250 (live)", "Curated Stocks"]
                     + list(STOCK_CATEGORIES.keys())
                     + sorted(STOCK_SECTORS.keys())
                 )
                 screener_scope = st.selectbox("Screener Scope", options=scope_options)
+
+                live_scope_map = {
+                    "Nifty 500 (live)": "nifty500",
+                    "Nifty Midcap 150 (live)": "midcap150",
+                    "Nifty Smallcap 250 (live)": "smallcap250",
+                    "Nifty Microcap 250 (live)": "microcap250",
+                }
 
                 if screener_scope == "All NSE Stocks":
                     with st.spinner("Fetching NSE stock list..."):
@@ -3308,7 +3688,12 @@ def main():
                                 if tick not in all_stocks.values():
                                     all_stocks[name] = tick
                         screener_stocks = all_stocks
-                elif screener_scope == "Curated Stocks (277)":
+                elif screener_scope in live_scope_map:
+                    with st.spinner(f"Fetching {screener_scope}..."):
+                        screener_stocks = fetch_nse_index_constituents(live_scope_map[screener_scope])
+                    if not screener_stocks:
+                        st.warning("Live fetch failed. Try again.")
+                elif screener_scope == "Curated Stocks":
                     all_stocks = {}
                     for cat_dict in STOCK_CATEGORIES.values():
                         for name, tick in cat_dict.items():
@@ -3316,7 +3701,14 @@ def main():
                                 all_stocks[name] = tick
                     screener_stocks = all_stocks
                 elif screener_scope in STOCK_CATEGORIES:
-                    screener_stocks = STOCK_CATEGORIES[screener_scope]
+                    idx_key = _NSE_INDEX_KEY.get(screener_scope)
+                    if idx_key:
+                        with st.spinner(f"Fetching live {screener_scope}..."):
+                            screener_stocks = fetch_nse_index_constituents(idx_key)
+                        if not screener_stocks:
+                            screener_stocks = STOCK_CATEGORIES[screener_scope]
+                    else:
+                        screener_stocks = STOCK_CATEGORIES[screener_scope]
                 elif screener_scope in STOCK_SECTORS:
                     screener_stocks = STOCK_SECTORS[screener_scope]
             else:
@@ -3428,6 +3820,15 @@ def main():
                     use_container_width=True,
                     key="run_screener_btn",
                 )
+        elif daily_picks_mode:
+            st.markdown("**Daily Trade Picks** scans the Nifty 500 universe for today's best swing/momentum setups, factoring in global macro news.")
+            picks_universe = st.selectbox(
+                "Scan Universe",
+                ["Nifty 500 (live, ~500 stocks)", "Nifty Midcap 150 (live)", "Nifty Smallcap 250 (live)",
+                 "Curated 300 (fast)"],
+            )
+            max_scan = st.slider("Max stocks to scan", 50, 500, 150, step=50)
+            daily_picks_btn = st.button("Run Today's Scan", type="primary", use_container_width=True)
         else:
             if ticker:
                 st.markdown(f"**Ticker:** `{ticker}`")
@@ -3580,6 +3981,57 @@ def main():
             "Past performance does not guarantee future results. Data may be delayed or inaccurate. "
             "Always consult a qualified, licensed financial adviser before making investment decisions."
         )
+    elif daily_picks_mode:
+        st.header("Daily Trade Picks")
+        st.caption("Swing & momentum setups filtered from today's market, adjusted for global macro news.")
+
+        # Resolve universe
+        universe_map = {
+            "Nifty 500 (live, ~500 stocks)": ("nifty500", None),
+            "Nifty Midcap 150 (live)": ("midcap150", None),
+            "Nifty Smallcap 250 (live)": ("smallcap250", None),
+            "Curated 300 (fast)": (None, None),
+        }
+        idx_key, _ = universe_map.get(picks_universe, (None, None))
+
+        if daily_picks_btn:
+            with st.spinner("Fetching stock universe..."):
+                if idx_key:
+                    universe = fetch_nse_index_constituents(idx_key)
+                    if not universe:
+                        st.warning("Live fetch failed — falling back to curated list.")
+                        universe = {}
+                        for cat_dict in STOCK_CATEGORIES.values():
+                            for n, t in cat_dict.items():
+                                if t not in universe.values():
+                                    universe[n] = t
+                else:
+                    universe = {}
+                    for cat_dict in STOCK_CATEGORIES.values():
+                        for n, t in cat_dict.items():
+                            if t not in universe.values():
+                                universe[n] = t
+
+            if not universe:
+                st.error("Could not build stock universe. Try again.")
+            else:
+                st.info(f"Scanning {min(max_scan, len(universe))} stocks from {picks_universe}...")
+                picks_results, macro_score, macro_headlines = run_daily_picks(
+                    universe, market="India", max_scan=max_scan
+                )
+                st.session_state["daily_picks_results"] = picks_results
+                st.session_state["daily_picks_macro_score"] = macro_score
+                st.session_state["daily_picks_macro_headlines"] = macro_headlines
+
+        picks_results = st.session_state.get("daily_picks_results")
+        macro_score = st.session_state.get("daily_picks_macro_score", 0.0)
+        macro_headlines = st.session_state.get("daily_picks_macro_headlines", [])
+
+        if picks_results is not None:
+            render_daily_picks(picks_results, macro_score, macro_headlines, market="India")
+        elif not daily_picks_btn:
+            st.info("Choose your scan universe above and click **Run Today's Scan** to see today's trade setups.")
+
     elif screener_mode:
         # Show screen builder if requested
         if st.session_state.get("show_screen_builder"):
