@@ -9,13 +9,9 @@ FOR EDUCATIONAL PURPOSES ONLY. NOT INVESTMENT ADVICE.
 # Section 1: Imports & Constants
 # =============================================================================
 import streamlit as st
-import yfinance as yf
 import pandas as pd
 import numpy as np
-import feedparser
 import requests
-import plotly.graph_objects as go
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus
 from concurrent.futures import ThreadPoolExecutor
@@ -23,9 +19,27 @@ import io
 import json
 import os
 
+# Heavy imports deferred to first use so Railway serves the first page faster
+def _yf():
+    import yfinance as yf
+    return yf
+
+def _feedparser():
+    import feedparser
+    return feedparser
+
+def _go():
+    import plotly.graph_objects as go
+    return go
+
+def _make_subplots():
+    from plotly.subplots import make_subplots
+    return make_subplots
+
 @st.cache_resource(show_spinner=False)
 def _get_vader_analyzer():
     """Initialize VADER once per process; lexicon load is expensive on cold start."""
+    from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
     return SentimentIntensityAnalyzer()
 
 # Technical analysis constants
@@ -873,7 +887,7 @@ def get_stock_sector(info):
 def fetch_stock_data(ticker):
     """Fetch price history, company info, and quarterly financials."""
     try:
-        stock = yf.Ticker(ticker)
+        stock = _yf().Ticker(ticker)
         hist = stock.history(period="1y")
         if hist.empty:
             return {"status": "error", "message": "No price data available"}
@@ -1090,7 +1104,7 @@ def fetch_news_headlines(stock_name, sector, market="India"):
     for category, query in queries.items():
         try:
             url = f"https://news.google.com/rss/search?q={quote_plus(query)}&hl={hl}&gl={gl}&ceid={ceid}"
-            feed = feedparser.parse(url)
+            feed = _feedparser().parse(url)
             headlines = []
             for entry in feed.entries[:10]:
                 headlines.append({
@@ -1137,7 +1151,7 @@ def fetch_global_macro_news(market="India"):
     for query in queries:
         try:
             url = f"https://news.google.com/rss/search?q={quote_plus(query)}&hl={hl}&gl={gl}&ceid={ceid}"
-            feed = feedparser.parse(url)
+            feed = _feedparser().parse(url)
             for entry in feed.entries[:4]:
                 all_headlines.append({
                     "title": entry.get("title", ""),
@@ -2823,6 +2837,7 @@ def render_daily_picks(results, macro_score, macro_headlines, market="India"):
 
 def render_gauge_chart(confidence, action):
     """Render a Plotly gauge chart for confidence level."""
+    go = _go()
     color_map = {"BULLISH": "#00c853", "BEARISH": "#ff1744", "NEUTRAL": "#ffc107"}
     bar_color = color_map.get(action, "#ffc107")
 
@@ -3258,7 +3273,8 @@ def render_news_table(sentiment_result):
 
 def render_price_chart(history, stock_name, market="India"):
     """Render stock price chart with SMAs, Bollinger Bands, MACD, and Volume."""
-    from plotly.subplots import make_subplots
+    go = _go()
+    make_subplots = _make_subplots()
 
     close = history["Close"]
     high = history["High"]
