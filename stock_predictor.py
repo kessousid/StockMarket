@@ -2563,93 +2563,105 @@ def generate_prediction(technical, sentiment, fundamental, oi_data=None):
 # =============================================================================
 
 def _swing_trade_score(technical, fundamental, sentiment, macro_adj):
-    """Score a stock specifically for swing/intraday trade suitability (0–100)."""
+    """Classify and score every stock — nothing is hidden, all 500 get a label."""
     if technical.get("status") != "ok":
         return 0, "No Data", []
 
     rsi = technical.get("rsi_value", 50)
     macd_hist = technical.get("macd_hist", 0)
-    bb_pct = technical.get("bb_pct", 50)   # 0=lower band, 100=upper band
+    bb_pct = technical.get("bb_pct", 50)      # 0=at lower band, 100=at upper band
     vol_ratio = technical.get("volume_ratio", 1.0)
     obv_signal = technical.get("obv_signal", 0)
-    momentum = technical.get("momentum_signal", 0)
     w52_pct = technical.get("w52_pct", 50)
     score_raw = technical.get("score", 0)
     current_price = technical.get("current_price", 0)
-    sma_long = technical.get("sma_long", current_price)
+    sma_long = technical.get("sma_long", current_price or 1)
+    macd_cross = technical.get("macd_crossover", "")
 
     reasons = []
     points = 0
 
-    # --- Setup type detection ---
-    # Momentum breakout: RSI 55-68, MACD positive, volume surge, near 52w high
-    is_momentum = (55 <= rsi <= 68) and macd_hist > 0 and vol_ratio >= 1.5 and w52_pct >= 55
-    # Pullback entry: RSI 33-48, price near BB lower band, MACD improving
-    is_pullback = (33 <= rsi <= 48) and bb_pct <= 35 and score_raw >= 0
-    # Reversal: RSI < 32 and OBV showing accumulation
-    is_reversal = rsi <= 32 and obv_signal > 0.1
-    # Bearish breakdown: RSI > 68, MACD negative, price below SMA
-    is_bearish = score_raw <= -0.2 and rsi >= 60 and macd_hist < 0
+    # ── Step 1: Classify setup — priority order matters ──────────────────────
 
-    if is_momentum:
-        setup = "Momentum Breakout"
-        points += 35
-        reasons.append(f"RSI {rsi:.0f} in momentum zone")
-    elif is_pullback:
-        setup = "Pullback Entry"
-        points += 30
-        reasons.append(f"Pullback to BB lower ({bb_pct:.0f}%), RSI {rsi:.0f}")
-    elif is_reversal:
+    # OVERBOUGHT: RSI > 75 OR price well above BB upper band
+    # Catches: Adani Green (RSI 99), IDBI Bank (RSI 72+BB 80%), Cipla (BB 107%)
+    if rsi > 75 or bb_pct > 95:
+        setup = "Overbought — Avoid"
+        reasons.append(f"RSI {rsi:.0f} overbought" if rsi > 75 else f"BB {bb_pct:.0f}% — above upper band")
+        points = max(0, 30 - int((rsi - 75) * 0.5)) if rsi > 75 else 10
+
+    # OVERSOLD REVERSAL: RSI < 35 — potential bottom regardless of OBV
+    # Catches: Infosys (RSI 27.4, BB -29%)
+    elif rsi < 35:
         setup = "Oversold Reversal"
-        points += 28
-        reasons.append(f"Oversold RSI {rsi:.0f} + OBV accumulation")
-    elif is_bearish:
-        setup = "Bearish Breakdown"
-        points += 25
-        reasons.append(f"RSI {rsi:.0f} overbought, MACD negative")
+        reasons.append(f"RSI {rsi:.0f} — deeply oversold, watch for bounce")
+        if bb_pct < 10:
+            reasons.append(f"BB {bb_pct:.0f}% — at/below lower band (strong support)")
+        points = 40 + max(0, int((35 - rsi) * 0.8))  # deeper = higher base score
+
+    # PULLBACK ENTRY: RSI 35–52, price near BB lower half — healthy dip in uptrend
+    elif rsi <= 52 and bb_pct <= 40:
+        setup = "Pullback Entry"
+        reasons.append(f"RSI {rsi:.0f} pulled back, BB {bb_pct:.0f}% near support")
+        points = 38
+
+    # MOMENTUM BREAKOUT: RSI 52–70, MACD bullish — trend continuation
+    elif 52 < rsi <= 70 and macd_hist > 0:
+        setup = "Momentum Breakout"
+        reasons.append(f"RSI {rsi:.0f} with MACD bullish — momentum intact")
+        points = 40
+
+    # BEARISH: clearly negative technicals
+    elif score_raw < -0.2 and macd_cross == "Bearish":
+        setup = "Bearish — Avoid"
+        reasons.append(f"Tech score {score_raw:+.2f}, MACD bearish crossover")
+        points = 15
+
+    # NEUTRAL: everything else
     else:
         setup = "Neutral"
-        points += max(0, int(abs(score_raw) * 20))
+        reasons.append(f"RSI {rsi:.0f}, no clear setup — wait for confirmation")
+        points = 20
 
-    # Volume confirmation (0–20 pts)
+    # ── Step 2: Volume confirmation bonus (0–20 pts) ─────────────────────────
     if vol_ratio >= 3.0:
-        points += 20; reasons.append(f"Volume surge {vol_ratio:.1f}x avg")
+        points += 20; reasons.append(f"Strong volume surge {vol_ratio:.1f}x avg")
     elif vol_ratio >= 2.0:
-        points += 14; reasons.append(f"High volume {vol_ratio:.1f}x avg")
-    elif vol_ratio >= 1.5:
-        points += 8; reasons.append(f"Above-avg volume {vol_ratio:.1f}x")
+        points += 12; reasons.append(f"High volume {vol_ratio:.1f}x avg")
+    elif vol_ratio >= 1.4:
+        points += 6; reasons.append(f"Above-avg volume {vol_ratio:.1f}x")
+    elif vol_ratio < 0.5:
+        points -= 5; reasons.append("Very low volume — low conviction")
 
-    # MACD crossover confirmation (0–15 pts)
-    macd_cross = technical.get("macd_crossover", "")
-    if macd_cross == "Bullish" and setup in ("Momentum Breakout", "Pullback Entry", "Oversold Reversal"):
-        points += 15; reasons.append("MACD bullish crossover")
-    elif macd_cross == "Bearish" and setup == "Bearish Breakdown":
-        points += 15; reasons.append("MACD bearish crossover")
+    # ── Step 3: MACD alignment (0–12 pts) ────────────────────────────────────
+    if macd_cross == "Bullish" and setup in ("Pullback Entry", "Oversold Reversal", "Momentum Breakout"):
+        points += 12; reasons.append("MACD bullish crossover confirms entry")
+    elif macd_cross == "Bearish" and setup in ("Overbought — Avoid", "Bearish — Avoid"):
+        points += 8; reasons.append("MACD bearish crossover confirms caution")
 
-    # Fundamental quality bonus (0–10 pts)
+    # ── Step 4: 52-week position context ─────────────────────────────────────
+    if w52_pct >= 80 and setup == "Momentum Breakout":
+        points += 8; reasons.append(f"Near 52W high ({w52_pct:.0f}%) — strong trend")
+    elif w52_pct <= 25 and setup in ("Oversold Reversal", "Pullback Entry"):
+        points += 8; reasons.append(f"Near 52W low ({w52_pct:.0f}%) — value zone")
+
+    # ── Step 5: Fundamental quality (0–10 pts) ────────────────────────────────
     if fundamental.get("status") == "ok":
         f_score = fundamental.get("score", 0)
         if f_score > 0.3:
-            points += 10; reasons.append("Strong fundamentals")
+            points += 10; reasons.append("Strong fundamentals back the trade")
         elif f_score > 0.1:
-            points += 5
+            points += 5; reasons.append("Decent fundamentals")
+        elif f_score < -0.2:
+            points -= 5; reasons.append("Weak fundamentals — higher risk")
 
-    # Sentiment alignment (0–10 pts)
-    if sentiment.get("status") == "ok":
-        s_score = sentiment.get("score", 0)
-        if (s_score > 0.1 and setup != "Bearish Breakdown") or (s_score < -0.1 and setup == "Bearish Breakdown"):
-            points += 10; reasons.append("News sentiment aligned")
-
-    # Global macro adjustment (−10 to +10)
-    points += int(macro_adj * 10)
-    if macro_adj > 0.1:
-        reasons.append("Positive global macro backdrop")
-    elif macro_adj < -0.1:
-        reasons.append("Cautious — negative macro backdrop")
-
-    # Price above SMA50 for longs (−5 if below, long setups only)
-    if setup not in ("Bearish Breakdown",) and sma_long and current_price < sma_long * 0.97:
-        points -= 5
+    # ── Step 6: Macro adjustment (−8 to +8) ──────────────────────────────────
+    macro_pts = int(macro_adj * 8)
+    points += macro_pts
+    if macro_adj > 0.05:
+        reasons.append("Positive global macro")
+    elif macro_adj < -0.05:
+        reasons.append("Negative global macro — add caution")
 
     return min(max(points, 0), 100), setup, reasons
 
@@ -2698,11 +2710,11 @@ def run_daily_picks(stocks_dict, market="India", max_scan=300):
             swing_score, setup, reasons = _swing_trade_score(
                 technical, fundamental, sentiment, macro_sentiment_score
             )
-            if swing_score < 20:
-                continue  # Skip low-quality setups
+            # Show everything — let the user filter. Nothing hidden.
 
             price = technical.get("current_price", 0)
-            trade_lvl = calculate_trade_levels(technical, "BULLISH" if setup != "Bearish Breakdown" else "BEARISH")
+            action_for_levels = "BEARISH" if setup in ("Overbought — Avoid", "Bearish — Avoid") else "BULLISH"
+            trade_lvl = calculate_trade_levels(technical, action_for_levels)
 
             results.append({
                 "Stock": name,
@@ -2755,29 +2767,58 @@ def render_daily_picks(results, macro_score, macro_headlines, market="India"):
     setup_counts = df["Setup"].value_counts()
     cols = st.columns(len(setup_counts))
     setup_colors = {
-        "Momentum Breakout": "#1976d2",
-        "Pullback Entry": "#00c853",
-        "Oversold Reversal": "#ff9800",
-        "Bearish Breakdown": "#ff1744",
-        "Neutral": "#9e9e9e",
+        "Momentum Breakout":  "#1976d2",
+        "Pullback Entry":     "#00c853",
+        "Oversold Reversal":  "#ff9800",
+        "Overbought — Avoid": "#b71c1c",
+        "Bearish — Avoid":    "#ff1744",
+        "Neutral":            "#9e9e9e",
+        "No Data":            "#e0e0e0",
+    }
+    setup_legend = {
+        "Momentum Breakout":  "RSI 52-70 + MACD bullish — trend continuing",
+        "Pullback Entry":     "RSI 35-52 near BB lower — dip in uptrend",
+        "Oversold Reversal":  "RSI < 35 — deeply oversold, watch for bounce",
+        "Overbought — Avoid": "RSI > 75 or BB > 95% — stretched, risk of pullback",
+        "Bearish — Avoid":    "Negative technicals — avoid or wait",
+        "Neutral":            "No clear setup — wait for confirmation",
     }
     for col, (setup, count) in zip(cols, setup_counts.items()):
         color = setup_colors.get(setup, "#9e9e9e")
+        legend = setup_legend.get(setup, "")
         col.markdown(
             f"<div style='background:{color}15;border:1px solid {color};border-radius:8px;"
             f"padding:10px;text-align:center;'>"
             f"<b style='color:{color};font-size:1.4em;'>{count}</b><br>"
-            f"<span style='font-size:0.8em;'>{setup}</span></div>",
+            f"<span style='font-size:0.82em;font-weight:600;'>{setup}</span><br>"
+            f"<span style='font-size:0.72em;color:#666;'>{legend}</span></div>",
             unsafe_allow_html=True,
         )
 
     st.markdown("")
 
+    # Actionable summary
+    actionable = df[df["Setup"].isin(["Momentum Breakout", "Pullback Entry", "Oversold Reversal"])]
+    avoid = df[df["Setup"].isin(["Overbought — Avoid", "Bearish — Avoid"])]
+    neutral = df[df["Setup"].isin(["Neutral"])]
+    st.markdown(
+        f"**{len(actionable)} stocks worth watching** (Momentum + Pullback + Oversold) | "
+        f"**{len(avoid)} stocks to avoid** (Overbought/Bearish) | "
+        f"**{len(neutral)} Neutral** (wait for setup)"
+    )
+
     # Setup filter
-    setup_options = ["All"] + df["Setup"].unique().tolist()
-    selected_setup = st.radio("Filter by Setup", setup_options, horizontal=True)
-    if selected_setup != "All":
-        df = df[df["Setup"] == selected_setup]
+    setup_options = ["Actionable (Buy setups)", "Avoid (Overbought/Bearish)", "All"] + sorted(df["Setup"].unique().tolist())
+    selected_setup = st.radio("Filter by Setup", setup_options, horizontal=True, key="picks_filter")
+
+    if selected_setup == "Actionable (Buy setups)":
+        view_df = actionable.copy()
+    elif selected_setup == "Avoid (Overbought/Bearish)":
+        view_df = avoid.copy()
+    elif selected_setup == "All":
+        view_df = df.copy()
+    else:
+        view_df = df[df["Setup"] == selected_setup].copy()
 
     def _fv(val, fmt=".2f", suffix=""):
         if val is None or (isinstance(val, float) and pd.isna(val)):
@@ -2788,18 +2829,19 @@ def render_daily_picks(results, macro_score, macro_headlines, market="India"):
             return "N/A"
 
     display_df = pd.DataFrame({
-        "Stock": df["Stock"],
-        "Setup": df["Setup"],
-        "Swing Score": df["Swing Score"],
-        "Price": df["Price"].apply(lambda x: _fv(x, ".2f")),
-        "RSI": df["RSI"].apply(lambda x: _fv(x, ".1f")),
-        "MACD": df["MACD"],
-        "Vol Ratio": df["Vol Ratio"].apply(lambda x: _fv(x, ".2f", "x")),
-        "BB%": df["BB%"].apply(lambda x: _fv(x, ".0f", "%")),
-        "Target": df["Target"].apply(lambda x: _fv(x, ".2f")),
-        "Stop Loss": df["Stop Loss"].apply(lambda x: _fv(x, ".2f")),
-        "R:R": df["R:R"].apply(lambda x: _fv(x, ".2f", "x")),
-        "Why": df["Reasons"],
+        "Stock":      view_df["Stock"],
+        "Setup":      view_df["Setup"],
+        "Swing Score":view_df["Swing Score"],
+        "Price":      view_df["Price"].apply(lambda x: _fv(x, ".2f")),
+        "RSI":        view_df["RSI"].apply(lambda x: _fv(x, ".1f")),
+        "MACD":       view_df["MACD"],
+        "Vol Ratio":  view_df["Vol Ratio"].apply(lambda x: _fv(x, ".2f", "x")),
+        "BB%":        view_df["BB%"].apply(lambda x: _fv(x, ".0f", "%")),
+        "52W%":       view_df["52W%"].apply(lambda x: _fv(x, ".0f", "%")),
+        "Target":     view_df["Target"].apply(lambda x: _fv(x, ".2f")),
+        "Stop Loss":  view_df["Stop Loss"].apply(lambda x: _fv(x, ".2f")),
+        "R:R":        view_df["R:R"].apply(lambda x: _fv(x, ".2f", "x")),
+        "Why":        view_df["Reasons"],
     })
 
     tbl_h = min(len(display_df) * 38 + 50, 800)
@@ -2813,7 +2855,7 @@ def render_daily_picks(results, macro_score, macro_headlines, market="India"):
             )
         },
     )
-    st.caption(f"Showing {len(display_df)} setups | Sorted by Swing Score descending")
+    st.caption(f"Showing {len(display_df)} of {len(df)} stocks scanned | Sorted by Swing Score")
 
     # Global macro headlines expander
     if macro_headlines:
