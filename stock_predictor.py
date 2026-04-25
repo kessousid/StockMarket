@@ -3906,13 +3906,30 @@ def main():
                     key="run_screener_btn",
                 )
         elif daily_picks_mode:
-            st.markdown("**Daily Trade Picks** scans the Nifty 500 universe for today's best swing/momentum setups, factoring in global macro news.")
+            st.markdown("**Daily Trade Picks** scans your chosen universe for today's best swing/momentum setups, factoring in global macro news.")
             picks_universe = st.selectbox(
                 "Scan Universe",
                 ["Nifty 500 (live, ~500 stocks)", "Nifty Midcap 150 (live)", "Nifty Smallcap 250 (live)",
                  "Curated 300 (fast)"],
             )
-            max_scan = st.slider("Max stocks to scan", 50, 500, 150, step=50)
+            # Default and max match the selected universe — no silent truncation
+            _universe_size = {
+                "Nifty 500 (live, ~500 stocks)": 500,
+                "Nifty Midcap 150 (live)":       150,
+                "Nifty Smallcap 250 (live)":     250,
+                "Curated 300 (fast)":             300,
+            }
+            _default_scan = _universe_size.get(picks_universe, 500)
+            max_scan = st.slider(
+                "Max stocks to scan",
+                min_value=50,
+                max_value=_default_scan,
+                value=_default_scan,
+                step=50,
+                help="Scan all stocks in the universe for complete results. Reduce to speed up.",
+            )
+            _est_min = max_scan // 50  # rough estimate: ~50 stocks/min on Railway
+            st.caption(f"Scanning all {max_scan} stocks — estimated ~{_est_min} min on Railway.")
             daily_picks_btn = st.button("Run Today's Scan", type="primary", use_container_width=True)
         else:
             if ticker:
