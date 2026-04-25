@@ -26,26 +26,38 @@ import os
 SMA_SHORT = 20
 SMA_LONG = 50
 RSI_PERIOD = 14
+MACD_FAST = 12
+MACD_SLOW = 26
+MACD_SIGNAL_PERIOD = 9
+BB_PERIOD = 20
+BB_STD = 2.0
+ATR_PERIOD = 14
+VOLUME_MA_PERIOD = 20
 
-# Composite weight constants
-TECH_SMA_WEIGHT = 0.40
-TECH_RSI_WEIGHT = 0.35
-TECH_MOMENTUM_WEIGHT = 0.25
+# Technical component weights (must sum to 1)
+TECH_SMA_WEIGHT = 0.18
+TECH_RSI_WEIGHT = 0.18
+TECH_MACD_WEIGHT = 0.20
+TECH_BB_WEIGHT = 0.15
+TECH_OBV_WEIGHT = 0.14
+TECH_MOMENTUM_WEIGHT = 0.15
 
 SENTIMENT_STOCK_WEIGHT = 0.50
 SENTIMENT_SECTOR_WEIGHT = 0.30
 SENTIMENT_MARKET_WEIGHT = 0.20
 
-FUND_REVENUE_WEIGHT = 0.20
-FUND_MARGIN_WEIGHT = 0.15
-FUND_PROFIT_WEIGHT = 0.20
-FUND_DEBT_EQUITY_WEIGHT = 0.20
-FUND_CURRENT_RATIO_WEIGHT = 0.10
+FUND_REVENUE_WEIGHT = 0.13
+FUND_MARGIN_WEIGHT = 0.10
+FUND_PROFIT_WEIGHT = 0.13
+FUND_DEBT_EQUITY_WEIGHT = 0.15
+FUND_CURRENT_RATIO_WEIGHT = 0.09
 FUND_ROE_WEIGHT = 0.15
+FUND_ROCA_WEIGHT = 0.12
+FUND_ROCE_WEIGHT = 0.13
 
 # Final prediction weights
-WEIGHT_TECHNICAL = 0.45
-WEIGHT_FUNDAMENTAL = 0.30
+WEIGHT_TECHNICAL = 0.40
+WEIGHT_FUNDAMENTAL = 0.35
 WEIGHT_SENTIMENT = 0.25
 
 # Prediction thresholds
@@ -351,11 +363,45 @@ SMALLCAP_STOCKS = {
     "Zomato": "ZOMATO.NS",
 }
 
+MICROCAP_STOCKS = {
+    "Butterfly Gandhimathi": "BUTTERFLY.NS",
+    "CARE Ratings": "CARERATING.NS",
+    "Dhampur Sugar": "DHAMPURSUG.NS",
+    "Elin Electronics": "ELIN.NS",
+    "Gokaldas Exports": "GOKALDAS.NS",
+    "GTPL Hathway": "GTPL.NS",
+    "Gulf Oil Lubricants": "GULFOILLUB.NS",
+    "Inox Wind": "INOXWIND.NS",
+    "ISGEC Heavy Engineering": "ISGEC.NS",
+    "JK Paper": "JKPAPER.NS",
+    "Kopran": "KOPRAN.NS",
+    "Lux Industries": "LUXIND.NS",
+    "Maithan Alloys": "MAITHANALL.NS",
+    "Maharashtra Seamless": "MAHSEAMLES.NS",
+    "Midhani": "MIDHANI.NS",
+    "MSTC": "MSTC.NS",
+    "Nelcast": "NELCAST.NS",
+    "Orient Electric": "ORIENTELEC.NS",
+    "Patel Engineering": "PATELENG.NS",
+    "Peninsula Land": "PENINLAND.NS",
+    "RACL Geartech": "RACLGEAR.NS",
+    "Rajratan Global Wire": "RAJRATAN.NS",
+    "Roto Pumps": "ROTOPUMPS.NS",
+    "Stylam Industries": "STYLAM.NS",
+    "TCNS Clothing": "TCNSBRANDS.NS",
+    "Tinna Rubber": "TINNARUBR.NS",
+    "VIP Industries": "VIPIND.NS",
+    "West Coast Paper": "WESTCOAST.NS",
+    "Wonderla Holidays": "WONDERLA.NS",
+    "Zaggle Prepaid": "ZAGGLE.NS",
+}
+
 STOCK_CATEGORIES = {
     "Large Cap (Nifty 50)": NIFTY_50,
     "Nifty Next 50": NIFTY_NEXT_50,
     "Mid Cap": MIDCAP_STOCKS,
     "Small Cap": SMALLCAP_STOCKS,
+    "Micro Cap": MICROCAP_STOCKS,
 }
 
 STOCK_SECTORS = {
@@ -754,7 +800,7 @@ def resolve_ticker(query, market="NSE"):
     
     # 1. Exact or partial match in pre-defined dictionaries
     if market == "NSE":
-        for stocks in [NIFTY_50, NIFTY_NEXT_50, MIDCAP_STOCKS, SMALLCAP_STOCKS]:
+        for stocks in [NIFTY_50, NIFTY_NEXT_50, MIDCAP_STOCKS, SMALLCAP_STOCKS, MICROCAP_STOCKS]:
             for name, ticker in stocks.items():
                 if query_upper == name.upper() or query_upper == ticker.upper().replace(".NS", ""):
                     return ticker, name
@@ -762,7 +808,7 @@ def resolve_ticker(query, market="NSE"):
             for name, ticker in stocks.items():
                 if query_upper == name.upper() or query_upper == ticker.upper().replace(".NS", ""):
                     return ticker, name
-        for stocks in [NIFTY_50, NIFTY_NEXT_50, MIDCAP_STOCKS, SMALLCAP_STOCKS]:
+        for stocks in [NIFTY_50, NIFTY_NEXT_50, MIDCAP_STOCKS, SMALLCAP_STOCKS, MICROCAP_STOCKS]:
             for name, ticker in stocks.items():
                 if query_upper in name.upper():
                     return ticker, name
@@ -797,12 +843,12 @@ def resolve_ticker(query, market="NSE"):
         for sector, stocks in US_STOCK_SECTORS.items():
             if query_upper in stocks.values() or query_upper in [n.upper() for n in stocks.keys()]:
                 return None, None
-        
+
         ticker = query_upper if query_upper.endswith(".NS") else f"{query_upper}.NS"
         return ticker, query_upper.replace(".NS", "")
     else:
         # Block known India stocks
-        for stocks in [NIFTY_50, NIFTY_NEXT_50, MIDCAP_STOCKS, SMALLCAP_STOCKS]:
+        for stocks in [NIFTY_50, NIFTY_NEXT_50, MIDCAP_STOCKS, SMALLCAP_STOCKS, MICROCAP_STOCKS]:
             if query_upper in [t.replace(".NS", "") for t in stocks.values()] or query_upper in [n.upper() for n in stocks.keys()]:
                 return None, None
                 
@@ -1021,51 +1067,170 @@ def fetch_news_headlines(stock_name, sector, market="India"):
     return results
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def fetch_oi_data(symbol_base):
+    """Fetch Put-Call Ratio from NSE option chain (India F&O stocks only)."""
+    try:
+        session = requests.Session()
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Referer": "https://www.nseindia.com/option-chain",
+            "Connection": "keep-alive",
+        }
+        session.get("https://www.nseindia.com", headers=headers, timeout=6)
+        url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol_base.upper()}"
+        resp = session.get(url, headers=headers, timeout=6)
+        if resp.status_code != 200:
+            return {"status": "error"}
+        data = resp.json()
+        records = data.get("records", {}).get("data", [])
+        total_call_oi = sum(r.get("CE", {}).get("openInterest", 0) for r in records if r.get("CE"))
+        total_put_oi = sum(r.get("PE", {}).get("openInterest", 0) for r in records if r.get("PE"))
+        total_call_chg = sum(r.get("CE", {}).get("changeinOpenInterest", 0) for r in records if r.get("CE"))
+        total_put_chg = sum(r.get("PE", {}).get("changeinOpenInterest", 0) for r in records if r.get("PE"))
+        if total_call_oi <= 0:
+            return {"status": "error"}
+        pcr = total_put_oi / total_call_oi
+        pcr_chg = (total_put_chg / total_call_chg) if total_call_chg and total_call_chg != 0 else None
+        # PCR > 1.2 → bullish (heavy put buying = hedging, smart money long)
+        # PCR < 0.8 → bearish
+        if pcr > 1.3:
+            oi_signal = min((pcr - 1.0) * 0.8, 1.0)
+        elif pcr > 1.0:
+            oi_signal = (pcr - 1.0) * 0.4
+        elif pcr < 0.7:
+            oi_signal = max((pcr - 1.0) * 0.8, -1.0)
+        elif pcr < 1.0:
+            oi_signal = (pcr - 1.0) * 0.4
+        else:
+            oi_signal = 0.0
+        return {
+            "status": "ok",
+            "pcr": round(pcr, 3),
+            "pcr_change": round(pcr_chg, 3) if pcr_chg else None,
+            "call_oi": total_call_oi,
+            "put_oi": total_put_oi,
+            "oi_signal": float(np.clip(oi_signal, -1, 1)),
+        }
+    except Exception:
+        return {"status": "error"}
+
+
 # =============================================================================
 # Section 5: Technical Analysis
 # =============================================================================
 
 def calculate_technical_indicators(price_df):
-    """Calculate SMA crossover, RSI, and momentum signals."""
+    """Calculate enhanced technical signals: SMA, RSI, MACD, Bollinger Bands, OBV, ATR, momentum."""
     if price_df is None or len(price_df) < SMA_LONG:
         return {"status": "insufficient_data"}
 
     close = price_df["Close"]
+    high = price_df["High"]
+    low = price_df["Low"]
+    volume = price_df.get("Volume", pd.Series(dtype=float))
 
-    # SMA Crossover Signal
+    # --- SMA Crossover ---
     sma_short = close.rolling(window=SMA_SHORT).mean()
     sma_long = close.rolling(window=SMA_LONG).mean()
-    latest_short = sma_short.iloc[-1]
-    latest_long = sma_long.iloc[-1]
+    latest_short = float(sma_short.iloc[-1])
+    latest_long = float(sma_long.iloc[-1])
+    sma_signal = float(np.clip((latest_short - latest_long) / latest_long * 10, -1, 1)) if latest_long else 0.0
 
-    if latest_long == 0:
-        sma_signal = 0.0
-    else:
-        sma_diff_pct = (latest_short - latest_long) / latest_long
-        sma_signal = float(np.clip(sma_diff_pct * 10, -1, 1))
-
-    # RSI Signal
+    # --- RSI ---
     delta = close.diff()
     gain = delta.where(delta > 0, 0.0).rolling(window=RSI_PERIOD).mean()
     loss = (-delta.where(delta < 0, 0.0)).rolling(window=RSI_PERIOD).mean()
-
-    latest_loss = loss.iloc[-1]
-    if latest_loss == 0:
-        rsi = 100.0
-    else:
-        rs = gain.iloc[-1] / latest_loss
-        rsi = 100.0 - (100.0 / (1.0 + rs))
-
+    latest_loss = float(loss.iloc[-1])
+    rsi = 100.0 if latest_loss == 0 else 100.0 - (100.0 / (1.0 + float(gain.iloc[-1]) / latest_loss))
     if rsi >= 70:
-        rsi_signal = -((rsi - 70) / 30)  # Overbought -> sell signal
+        rsi_signal = -((rsi - 70) / 30)
     elif rsi <= 30:
-        rsi_signal = (30 - rsi) / 30  # Oversold -> buy signal
+        rsi_signal = (30 - rsi) / 30
     else:
-        rsi_signal = (rsi - 50) / 40  # Neutral zone, slight lean
-
+        rsi_signal = (rsi - 50) / 40
     rsi_signal = float(np.clip(rsi_signal, -1, 1))
 
-    # Momentum Signal (5-day vs 20-day return)
+    # --- MACD ---
+    ema_fast = close.ewm(span=MACD_FAST, adjust=False).mean()
+    ema_slow = close.ewm(span=MACD_SLOW, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=MACD_SIGNAL_PERIOD, adjust=False).mean()
+    macd_hist = macd_line - signal_line
+    latest_macd = float(macd_hist.iloc[-1])
+    prev_macd = float(macd_hist.iloc[-2]) if len(macd_hist) > 1 else latest_macd
+    # Normalize by price to make scale-independent
+    price_scale = float(close.iloc[-1])
+    if price_scale and price_scale != 0:
+        macd_norm = latest_macd / price_scale * 100
+        macd_trend = (latest_macd - prev_macd) / price_scale * 200
+        macd_signal_val = float(np.clip(macd_norm * 3 + macd_trend, -1, 1))
+    else:
+        macd_signal_val = 0.0
+    macd_crossover = "Bullish" if macd_line.iloc[-1] > signal_line.iloc[-1] else "Bearish"
+
+    # --- Bollinger Bands ---
+    bb_mid = close.rolling(window=BB_PERIOD).mean()
+    bb_std_val = close.rolling(window=BB_PERIOD).std()
+    bb_upper = bb_mid + BB_STD * bb_std_val
+    bb_lower = bb_mid - BB_STD * bb_std_val
+    latest_price = float(close.iloc[-1])
+    bb_u = float(bb_upper.iloc[-1])
+    bb_l = float(bb_lower.iloc[-1])
+    bb_m = float(bb_mid.iloc[-1])
+    bb_width = bb_u - bb_l
+    if bb_width > 0:
+        bb_pct = (latest_price - bb_l) / bb_width  # 0=at lower, 1=at upper
+        if bb_pct <= 0.1:
+            bb_signal_val = 1.0   # At/below lower band → oversold
+        elif bb_pct >= 0.9:
+            bb_signal_val = -1.0  # At/above upper band → overbought
+        elif bb_pct <= 0.3:
+            bb_signal_val = 0.5
+        elif bb_pct >= 0.7:
+            bb_signal_val = -0.5
+        else:
+            bb_signal_val = (0.5 - bb_pct) * 2.0  # slight lean based on position
+    else:
+        bb_pct = 0.5
+        bb_signal_val = 0.0
+    bb_signal_val = float(np.clip(bb_signal_val, -1, 1))
+
+    # --- OBV (On-Balance Volume) trend ---
+    obv_signal_val = 0.0
+    obv_trend_label = "N/A"
+    if volume is not None and not volume.empty and len(volume) >= VOLUME_MA_PERIOD:
+        close_diff = close.diff()
+        obv = (np.where(close_diff > 0, volume, np.where(close_diff < 0, -volume, 0))).cumsum()
+        obv_series = pd.Series(obv, index=close.index)
+        obv_ma = obv_series.rolling(window=VOLUME_MA_PERIOD).mean()
+        latest_obv = float(obv_series.iloc[-1])
+        latest_obv_ma = float(obv_ma.iloc[-1])
+        if latest_obv_ma != 0:
+            obv_diff = (latest_obv - latest_obv_ma) / abs(latest_obv_ma)
+            obv_signal_val = float(np.clip(obv_diff * 3, -1, 1))
+            obv_trend_label = "Accumulation" if obv_signal_val > 0.1 else "Distribution" if obv_signal_val < -0.1 else "Neutral"
+
+        # Volume surge detection (current volume vs 20-day avg)
+        vol_ma = volume.rolling(window=VOLUME_MA_PERIOD).mean()
+        latest_vol = float(volume.iloc[-1])
+        avg_vol = float(vol_ma.iloc[-1]) if not pd.isna(vol_ma.iloc[-1]) else latest_vol
+        volume_ratio = round(latest_vol / avg_vol, 2) if avg_vol > 0 else 1.0
+    else:
+        volume_ratio = 1.0
+
+    # --- ATR (Average True Range) ---
+    tr = pd.concat([
+        high - low,
+        (high - close.shift(1)).abs(),
+        (low - close.shift(1)).abs(),
+    ], axis=1).max(axis=1)
+    atr = float(tr.rolling(window=ATR_PERIOD).mean().iloc[-1])
+
+    # --- Momentum Signal (5-day vs 20-day return) ---
     if len(close) >= 20:
         ret_5d = (close.iloc[-1] - close.iloc[-5]) / close.iloc[-5] if close.iloc[-5] != 0 else 0
         ret_20d = (close.iloc[-1] - close.iloc[-20]) / close.iloc[-20] if close.iloc[-20] != 0 else 0
@@ -1073,23 +1238,114 @@ def calculate_technical_indicators(price_df):
     else:
         momentum_signal = 0.0
 
-    # Composite technical score
+    # --- 52-week position ---
+    w52_high = float(high.max())
+    w52_low = float(low.min())
+    w52_range = w52_high - w52_low
+    w52_pct = (latest_price - w52_low) / w52_range if w52_range > 0 else 0.5  # 0=at low, 1=at high
+
+    # --- Composite technical score ---
     composite = (
         sma_signal * TECH_SMA_WEIGHT
         + rsi_signal * TECH_RSI_WEIGHT
+        + macd_signal_val * TECH_MACD_WEIGHT
+        + bb_signal_val * TECH_BB_WEIGHT
+        + obv_signal_val * TECH_OBV_WEIGHT
         + momentum_signal * TECH_MOMENTUM_WEIGHT
     )
 
     return {
         "status": "ok",
         "score": float(np.clip(composite, -1, 1)),
+        # SMA
         "sma_signal": sma_signal,
-        "rsi_signal": rsi_signal,
-        "rsi_value": rsi,
-        "momentum_signal": momentum_signal,
         "sma_short": latest_short,
         "sma_long": latest_long,
-        "current_price": float(close.iloc[-1]),
+        # RSI
+        "rsi_signal": rsi_signal,
+        "rsi_value": rsi,
+        # MACD
+        "macd_signal": macd_signal_val,
+        "macd_line": float(macd_line.iloc[-1]),
+        "macd_signal_line": float(signal_line.iloc[-1]),
+        "macd_hist": latest_macd,
+        "macd_crossover": macd_crossover,
+        # Bollinger Bands
+        "bb_signal": bb_signal_val,
+        "bb_upper": bb_u,
+        "bb_lower": bb_l,
+        "bb_mid": bb_m,
+        "bb_pct": round(bb_pct * 100, 1),
+        # OBV / Volume
+        "obv_signal": obv_signal_val,
+        "obv_trend": obv_trend_label,
+        "volume_ratio": volume_ratio,
+        # Momentum & Price
+        "momentum_signal": momentum_signal,
+        "current_price": latest_price,
+        "atr": round(atr, 2),
+        "w52_high": round(w52_high, 2),
+        "w52_low": round(w52_low, 2),
+        "w52_pct": round(w52_pct * 100, 1),
+    }
+
+
+def calculate_trade_levels(technical, prediction_action):
+    """Calculate entry zone, target prices, and stop loss using support/resistance + ATR."""
+    price = technical.get("current_price")
+    atr = technical.get("atr", 0)
+    w52_high = technical.get("w52_high")
+    w52_low = technical.get("w52_low")
+    bb_upper = technical.get("bb_upper")
+    bb_lower = technical.get("bb_lower")
+    sma_long = technical.get("sma_long")
+
+    if not price or not atr:
+        return None
+
+    # Estimate support and resistance from available levels
+    resistance_candidates = [x for x in [bb_upper, w52_high, sma_long * 1.03] if x and x > price]
+    support_candidates = [x for x in [bb_lower, w52_low, sma_long * 0.97] if x and x < price]
+
+    nearest_resistance = min(resistance_candidates) if resistance_candidates else price * 1.08
+    nearest_support = max(support_candidates) if support_candidates else price * 0.93
+
+    if prediction_action == "BULLISH":
+        entry_low = round(price * 0.99, 2)
+        entry_high = round(price * 1.005, 2)
+        stop_loss = round(max(nearest_support - atr * 0.5, price * 0.92), 2)
+        target1 = round(min(nearest_resistance, price * 1.07), 2)
+        risk = price - stop_loss
+        target2 = round(price + risk * 2.5, 2)
+        target3 = round(price + risk * 4.0, 2)
+    elif prediction_action == "BEARISH":
+        entry_low = round(price * 0.995, 2)
+        entry_high = round(price * 1.01, 2)
+        stop_loss = round(min(nearest_resistance + atr * 0.5, price * 1.08), 2)
+        target1 = round(max(nearest_support, price * 0.93), 2)
+        risk = stop_loss - price
+        target2 = round(price - risk * 2.5, 2)
+        target3 = round(price - risk * 4.0, 2)
+    else:
+        return None
+
+    risk_val = abs(price - stop_loss)
+    reward1 = abs(target1 - price)
+    rr1 = round(reward1 / risk_val, 2) if risk_val > 0 else 0
+    rr2 = round(abs(target2 - price) / risk_val, 2) if risk_val > 0 else 0
+
+    return {
+        "entry_low": entry_low,
+        "entry_high": entry_high,
+        "stop_loss": stop_loss,
+        "target1": target1,
+        "target2": target2,
+        "target3": target3,
+        "risk_reward1": rr1,
+        "risk_reward2": rr2,
+        "risk_per_share": round(risk_val, 2),
+        "nearest_support": round(nearest_support, 2),
+        "nearest_resistance": round(nearest_resistance, 2),
     }
 
 
@@ -1294,21 +1550,102 @@ def analyze_fundamentals(quarterly_df, info, balance_sheet_df=None):
     except Exception:
         pass
 
+    # Return on Capital Assets (ROCA = Net Income / Total Assets)
+    raw_roca = None
+    try:
+        roa = info.get("returnOnAssets")
+        if roa is not None:
+            raw_roca = float(roa)
+            if roa >= 0.15:
+                signals["roca"] = 1.0
+            elif roa >= 0.10:
+                signals["roca"] = 0.7
+            elif roa >= 0.05:
+                signals["roca"] = 0.3
+            elif roa >= 0:
+                signals["roca"] = 0.0
+            else:
+                signals["roca"] = max(roa * 5, -1.0)
+            signals["roca"] = float(np.clip(signals["roca"], -1, 1))
+            available_signals += 1
+        elif balance_sheet_df is not None and not balance_sheet_df.empty and quarterly_df is not None:
+            # Compute from financial statements
+            ni_row = None
+            for lbl in ["Net Income", "NetIncome", "Net Income Common Stockholders"]:
+                if lbl in quarterly_df.index:
+                    ni_row = quarterly_df.loc[lbl]
+                    break
+            ta_row = None
+            for lbl in ["Total Assets", "TotalAssets"]:
+                if lbl in balance_sheet_df.index:
+                    ta_row = balance_sheet_df.loc[lbl]
+                    break
+            if ni_row is not None and ta_row is not None:
+                ni_val = float(ni_row.iloc[0])
+                ta_val = float(ta_row.iloc[0])
+                if ta_val and ta_val != 0:
+                    raw_roca = ni_val / ta_val
+                    signals["roca"] = float(np.clip(raw_roca * 7, -1, 1))
+                    available_signals += 1
+    except Exception:
+        pass
+
+    # Return on Capital Employed (ROCE = EBIT / Capital Employed)
+    raw_roce = None
+    try:
+        if balance_sheet_df is not None and not balance_sheet_df.empty and quarterly_df is not None:
+            ebit_row = None
+            for lbl in ["EBIT", "Operating Income", "OperatingIncome"]:
+                if lbl in quarterly_df.index:
+                    ebit_row = quarterly_df.loc[lbl]
+                    break
+            ta_row = None
+            for lbl in ["Total Assets", "TotalAssets"]:
+                if lbl in balance_sheet_df.index:
+                    ta_row = balance_sheet_df.loc[lbl]
+                    break
+            cl_row = None
+            for lbl in ["Current Liabilities", "CurrentLiabilities", "Total Current Liabilities"]:
+                if lbl in balance_sheet_df.index:
+                    cl_row = balance_sheet_df.loc[lbl]
+                    break
+            if ebit_row is not None and ta_row is not None and cl_row is not None:
+                ce = float(ta_row.iloc[0]) - float(cl_row.iloc[0])
+                if ce and ce != 0:
+                    raw_roce = float(ebit_row.iloc[0]) / ce
+                    if raw_roce >= 0.20:
+                        signals["roce"] = 1.0
+                    elif raw_roce >= 0.12:
+                        signals["roce"] = 0.6
+                    elif raw_roce >= 0.08:
+                        signals["roce"] = 0.2
+                    elif raw_roce >= 0:
+                        signals["roce"] = -0.1
+                    else:
+                        signals["roce"] = max(raw_roce * 5, -1.0)
+                    signals["roce"] = float(np.clip(signals["roce"], -1, 1))
+                    available_signals += 1
+    except Exception:
+        pass
+
     if available_signals == 0:
         return {"status": "insufficient_data"}
 
-    # Compute composite with available signals
-    if available_signals == 6:
-        composite = (
-            signals.get("revenue_growth", 0) * FUND_REVENUE_WEIGHT
-            + signals.get("profit_margin", 0) * FUND_MARGIN_WEIGHT
-            + signals.get("profit_growth", 0) * FUND_PROFIT_WEIGHT
-            + signals.get("debt_to_equity", 0) * FUND_DEBT_EQUITY_WEIGHT
-            + signals.get("current_ratio", 0) * FUND_CURRENT_RATIO_WEIGHT
-            + signals.get("roe", 0) * FUND_ROE_WEIGHT
-        )
+    # Compute composite using fixed weights when we have all 8, else equal weight
+    all_weights = {
+        "revenue_growth": FUND_REVENUE_WEIGHT,
+        "profit_margin": FUND_MARGIN_WEIGHT,
+        "profit_growth": FUND_PROFIT_WEIGHT,
+        "debt_to_equity": FUND_DEBT_EQUITY_WEIGHT,
+        "current_ratio": FUND_CURRENT_RATIO_WEIGHT,
+        "roe": FUND_ROE_WEIGHT,
+        "roca": FUND_ROCA_WEIGHT,
+        "roce": FUND_ROCE_WEIGHT,
+    }
+    total_w = sum(all_weights[k] for k in signals if k in all_weights)
+    if total_w > 0:
+        composite = sum(signals[k] * all_weights.get(k, 0) / total_w for k in signals if k in all_weights)
     else:
-        # Equal weight for available signals
         vals = list(signals.values())
         composite = sum(vals) / len(vals)
 
@@ -1321,11 +1658,15 @@ def analyze_fundamentals(quarterly_df, info, balance_sheet_df=None):
         "debt_to_equity": signals.get("debt_to_equity"),
         "current_ratio": signals.get("current_ratio"),
         "roe": signals.get("roe"),
+        "roca": signals.get("roca"),
+        "roce": signals.get("roce"),
         "available_signals": available_signals,
         "raw_margin": info.get("profitMargins"),
         "raw_de_ratio": raw_de_ratio,
         "raw_current_ratio": raw_current_ratio,
         "raw_roe": raw_roe,
+        "raw_roca": raw_roca,
+        "raw_roce": raw_roce,
     }
 
 
@@ -2043,7 +2384,7 @@ def run_screener(stock_dict, market="India"):
 # Section 8: Prediction Engine
 # =============================================================================
 
-def generate_prediction(technical, sentiment, fundamental):
+def generate_prediction(technical, sentiment, fundamental, oi_data=None):
     """Generate final Bullish/Neutral/Bearish signal with confidence."""
     components = {}
     weights = {}
@@ -2059,6 +2400,11 @@ def generate_prediction(technical, sentiment, fundamental):
     if sentiment.get("status") == "ok":
         components["sentiment"] = sentiment["score"]
         weights["sentiment"] = WEIGHT_SENTIMENT
+
+    # OI / Put-Call Ratio adds a small tilt when available
+    if oi_data and oi_data.get("status") == "ok":
+        components["open_interest"] = oi_data["oi_signal"]
+        weights["open_interest"] = 0.08  # small weight; redistributed below
 
     if not components:
         return {
@@ -2428,17 +2774,24 @@ def render_component_breakdown(technical, sentiment, fundamental, prediction):
             score = technical["score"]
             color = "#00c853" if score > 0.1 else "#ff1744" if score < -0.1 else "#ffc107"
             st.markdown(f"**Score:** <span style='color:{color}'>{score:+.3f}</span>", unsafe_allow_html=True)
-            st.markdown(f"- RSI: {technical['rsi_value']:.1f}")
-            st.markdown(f"- SMA{SMA_SHORT}: {technical['sma_short']:.2f}")
-            st.markdown(f"- SMA{SMA_LONG}: {technical['sma_long']:.2f}")
-            st.markdown(f"- Price: {technical['current_price']:.2f}")
-
-            sma_label = "Bullish" if technical["sma_signal"] > 0 else "Bearish"
+            st.markdown(f"- Price: **{technical['current_price']:.2f}**")
+            st.markdown(f"- RSI ({RSI_PERIOD}): **{technical['rsi_value']:.1f}**")
             rsi_label = "Overbought" if technical["rsi_value"] > 70 else "Oversold" if technical["rsi_value"] < 30 else "Neutral"
-            mom_label = "Positive" if technical["momentum_signal"] > 0.1 else "Negative" if technical["momentum_signal"] < -0.1 else "Flat"
-            st.markdown(f"- SMA Cross: **{sma_label}**")
             st.markdown(f"- RSI Zone: **{rsi_label}**")
+            st.markdown(f"- SMA{SMA_SHORT}: {technical['sma_short']:.2f} | SMA{SMA_LONG}: {technical['sma_long']:.2f}")
+            sma_label = "Bullish" if technical["sma_signal"] > 0 else "Bearish"
+            st.markdown(f"- SMA Cross: **{sma_label}**")
+            if technical.get("macd_crossover"):
+                st.markdown(f"- MACD: **{technical['macd_crossover']}** (hist: {technical.get('macd_hist', 0):+.3f})")
+            if technical.get("bb_pct") is not None:
+                st.markdown(f"- BB Position: **{technical['bb_pct']}%** (0=lower, 100=upper band)")
+            obv_t = technical.get("obv_trend", "N/A")
+            vol_r = technical.get("volume_ratio", 1.0)
+            st.markdown(f"- OBV Trend: **{obv_t}** | Vol Ratio: **{vol_r:.1f}x**")
+            mom_label = "Positive" if technical["momentum_signal"] > 0.1 else "Negative" if technical["momentum_signal"] < -0.1 else "Flat"
             st.markdown(f"- Momentum: **{mom_label}**")
+            st.markdown(f"- ATR: {technical.get('atr', 0):.2f} | 52W: {technical.get('w52_low', 0):.0f}–{technical.get('w52_high', 0):.0f}")
+            st.markdown(f"- 52W Position: **{technical.get('w52_pct', 0):.0f}%**")
         else:
             st.warning("Insufficient price data")
 
@@ -2492,7 +2845,17 @@ def render_component_breakdown(technical, sentiment, fundamental, prediction):
             else:
                 st.markdown("- Return on Equity: N/A")
 
-            st.markdown(f"- Signals Available: **{fundamental['available_signals']}/6**")
+            if fundamental.get("raw_roca") is not None:
+                st.markdown(f"- Return on Capital Assets: {fundamental['raw_roca']*100:.1f}%")
+            else:
+                st.markdown("- ROCA: N/A")
+
+            if fundamental.get("raw_roce") is not None:
+                st.markdown(f"- Return on Capital Employed: {fundamental['raw_roce']*100:.1f}%")
+            else:
+                st.markdown("- ROCE: N/A")
+
+            st.markdown(f"- Signals Available: **{fundamental['available_signals']}/8**")
         else:
             st.warning("Insufficient fundamental data")
 
@@ -2535,33 +2898,149 @@ def render_news_table(sentiment_result):
 
 
 def render_price_chart(history, stock_name, market="India"):
-    """Render stock price chart with SMAs."""
+    """Render stock price chart with SMAs, Bollinger Bands, MACD, and Volume."""
+    from plotly.subplots import make_subplots
+
     close = history["Close"]
+    high = history["High"]
+    low = history["Low"]
+    volume = history.get("Volume", pd.Series(dtype=float))
+
     sma_short = close.rolling(window=SMA_SHORT).mean()
     sma_long = close.rolling(window=SMA_LONG).mean()
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=history.index, y=close,
-        name="Close Price", line=dict(color="#1976d2", width=2),
-    ))
-    fig.add_trace(go.Scatter(
-        x=history.index, y=sma_short,
-        name=f"SMA {SMA_SHORT}", line=dict(color="#ff9800", width=1, dash="dash"),
-    ))
-    fig.add_trace(go.Scatter(
-        x=history.index, y=sma_long,
-        name=f"SMA {SMA_LONG}", line=dict(color="#e91e63", width=1, dash="dash"),
-    ))
-    fig.update_layout(
-        title=f"{stock_name} - 1 Year Price Chart",
-        xaxis_title="Date",
-        yaxis_title="Price (USD)" if market == "US" else "Price (INR)",
-        height=400,
-        margin=dict(t=40, b=40, l=50, r=20),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    # Bollinger Bands
+    bb_mid = close.rolling(window=BB_PERIOD).mean()
+    bb_std_col = close.rolling(window=BB_PERIOD).std()
+    bb_upper = bb_mid + BB_STD * bb_std_col
+    bb_lower = bb_mid - BB_STD * bb_std_col
+
+    # MACD
+    ema_fast = close.ewm(span=MACD_FAST, adjust=False).mean()
+    ema_slow = close.ewm(span=MACD_SLOW, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=MACD_SIGNAL_PERIOD, adjust=False).mean()
+    macd_hist = macd_line - signal_line
+
+    has_volume = volume is not None and not volume.empty and volume.sum() > 0
+
+    rows = 3 if has_volume else 2
+    row_heights = [0.55, 0.25, 0.20] if has_volume else [0.65, 0.35]
+    subplot_titles = [f"{stock_name} - Price & Indicators", "MACD"] + (["Volume"] if has_volume else [])
+
+    fig = make_subplots(
+        rows=rows, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.06,
+        row_heights=row_heights,
+        subplot_titles=subplot_titles,
     )
+
+    # Row 1: Candlestick + SMAs + Bollinger Bands
+    fig.add_trace(go.Candlestick(
+        x=history.index, open=history["Open"], high=high, low=low, close=close,
+        name="Price", increasing_line_color="#00c853", decreasing_line_color="#ff1744",
+        showlegend=False,
+    ), row=1, col=1)
+    fig.add_trace(go.Scatter(x=history.index, y=sma_short, name=f"SMA{SMA_SHORT}",
+                             line=dict(color="#ff9800", width=1, dash="dash")), row=1, col=1)
+    fig.add_trace(go.Scatter(x=history.index, y=sma_long, name=f"SMA{SMA_LONG}",
+                             line=dict(color="#e91e63", width=1, dash="dash")), row=1, col=1)
+    fig.add_trace(go.Scatter(x=history.index, y=bb_upper, name="BB Upper",
+                             line=dict(color="rgba(100,100,200,0.5)", width=1, dash="dot"),
+                             showlegend=True), row=1, col=1)
+    fig.add_trace(go.Scatter(x=history.index, y=bb_lower, name="BB Lower",
+                             line=dict(color="rgba(100,100,200,0.5)", width=1, dash="dot"),
+                             fill="tonexty", fillcolor="rgba(100,100,200,0.05)",
+                             showlegend=False), row=1, col=1)
+
+    # Row 2: MACD
+    colors_hist = ["#00c853" if v >= 0 else "#ff1744" for v in macd_hist]
+    fig.add_trace(go.Bar(x=history.index, y=macd_hist, name="MACD Hist",
+                         marker_color=colors_hist, showlegend=False), row=2, col=1)
+    fig.add_trace(go.Scatter(x=history.index, y=macd_line, name="MACD",
+                             line=dict(color="#1976d2", width=1)), row=2, col=1)
+    fig.add_trace(go.Scatter(x=history.index, y=signal_line, name="Signal",
+                             line=dict(color="#ff9800", width=1, dash="dash")), row=2, col=1)
+
+    # Row 3: Volume
+    if has_volume:
+        vol_colors = ["#00c853" if c >= o else "#ff1744"
+                      for c, o in zip(history["Close"], history["Open"])]
+        fig.add_trace(go.Bar(x=history.index, y=volume, name="Volume",
+                             marker_color=vol_colors, showlegend=False), row=3, col=1)
+        vol_ma = volume.rolling(window=VOLUME_MA_PERIOD).mean()
+        fig.add_trace(go.Scatter(x=history.index, y=vol_ma, name=f"Vol MA{VOLUME_MA_PERIOD}",
+                                 line=dict(color="#9c27b0", width=1)), row=3, col=1)
+
+    currency = "USD" if market == "US" else "INR"
+    fig.update_layout(
+        height=600,
+        margin=dict(t=60, b=40, l=60, r=20),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        xaxis_rangeslider_visible=False,
+    )
+    fig.update_yaxes(title_text=f"Price ({currency})", row=1, col=1)
+    fig.update_yaxes(title_text="MACD", row=2, col=1)
+    if has_volume:
+        fig.update_yaxes(title_text="Volume", row=3, col=1)
+
     return fig
+
+
+def render_trade_recommendation(prediction, trade_levels, oi_data, technical):
+    """Render actionable trade setup: entry, target, stop loss, risk-reward."""
+    action = prediction["action"]
+    score = prediction["score"]
+    confidence = prediction["confidence"]
+
+    action_colors = {"BULLISH": "#00c853", "BEARISH": "#ff1744", "NEUTRAL": "#ffc107"}
+    action_bg = {"BULLISH": "#e8f5e9", "BEARISH": "#ffebee", "NEUTRAL": "#fff8e1"}
+    action_border = action_colors.get(action, "#ffc107")
+    bg = action_bg.get(action, "#fff8e1")
+
+    # Header signal box
+    st.markdown(
+        f"""
+        <div style="border:2px solid {action_border};background:{bg};border-radius:10px;
+                    padding:16px 20px;margin-bottom:16px;">
+          <h2 style="margin:0;color:{action_border};">{action}</h2>
+          <p style="margin:4px 0 0 0;font-size:1em;color:#555;">
+            Composite Score: <b>{score:+.3f}</b> &nbsp;|&nbsp; Confidence: <b>{confidence:.1f}%</b>
+          </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Trade levels card
+    if trade_levels:
+        col_entry, col_target, col_sl = st.columns(3)
+        with col_entry:
+            st.markdown("**Entry Zone**")
+            st.markdown(f"₹ {trade_levels['entry_low']:.2f} – {trade_levels['entry_high']:.2f}")
+            st.caption(f"Support: ₹{trade_levels['nearest_support']:.2f}")
+        with col_target:
+            st.markdown("**Targets**")
+            st.markdown(f"T1: ₹{trade_levels['target1']:.2f}  &nbsp; (R:R = {trade_levels['risk_reward1']}x)")
+            st.markdown(f"T2: ₹{trade_levels['target2']:.2f}  &nbsp; (R:R = {trade_levels['risk_reward2']}x)")
+            st.caption(f"T3 (extended): ₹{trade_levels['target3']:.2f}")
+        with col_sl:
+            st.markdown("**Stop Loss**")
+            sl_pct = abs(trade_levels["stop_loss"] - trade_levels["entry_low"]) / trade_levels["entry_low"] * 100
+            st.markdown(f"₹{trade_levels['stop_loss']:.2f}  &nbsp; ({sl_pct:.1f}% risk)")
+            st.caption(f"Risk/share: ₹{trade_levels['risk_per_share']:.2f} | ATR: ₹{technical.get('atr', 0):.2f}")
+
+    # OI data row
+    if oi_data and oi_data.get("status") == "ok":
+        pcr = oi_data.get("pcr", 0)
+        pcr_label = "Bullish (heavy hedging)" if pcr > 1.2 else "Bearish (call overwrite)" if pcr < 0.8 else "Neutral"
+        call_oi = oi_data.get("call_oi", 0)
+        put_oi = oi_data.get("put_oi", 0)
+        st.markdown(
+            f"**Open Interest** — PCR: **{pcr:.3f}** ({pcr_label}) | "
+            f"Call OI: {call_oi:,} | Put OI: {put_oi:,}",
+        )
 
 
 # =============================================================================
@@ -3007,8 +3486,15 @@ def main():
                 stock_data.get("cashflow"),
             )
 
+        # Fetch OI (India F&O stocks only)
+        oi_result = {"status": "error"}
+        if market == "India":
+            symbol_base = ticker.replace(".NS", "")
+            with st.spinner("Fetching Open Interest data..."):
+                oi_result = fetch_oi_data(symbol_base)
+
         # Generate prediction
-        prediction = generate_prediction(technical_result, sentiment_result, fundamental_result)
+        prediction = generate_prediction(technical_result, sentiment_result, fundamental_result, oi_data=oi_result)
 
         if prediction["status"] == "error":
             st.error(prediction.get("message", "Could not generate prediction."))
@@ -3019,32 +3505,16 @@ def main():
         confidence = prediction["confidence"]
         score = prediction["score"]
 
-        # Big colored signal label
-        action_colors = {"BULLISH": "#00c853", "BEARISH": "#ff1744", "NEUTRAL": "#ffc107"}
-        action_text_colors = {"BULLISH": "white", "BEARISH": "white", "NEUTRAL": "black"}
-        bg = action_colors.get(action, "#ffc107")
-        fg = action_text_colors.get(action, "black")
+        # Calculate trade levels
+        trade_levels = None
+        if technical_result.get("status") == "ok" and action != "NEUTRAL":
+            trade_levels = calculate_trade_levels(technical_result, action)
 
-        st.markdown(
-            f"""
-            <div style="
-                background-color: {bg};
-                color: {fg};
-                padding: 20px;
-                border-radius: 12px;
-                text-align: center;
-                margin-bottom: 20px;
-            ">
-                <h1 style="margin:0; font-size: 3em; color: {fg};">{action}</h1>
-                <p style="margin:5px 0 0 0; font-size: 1.2em; color: {fg};">
-                    {selected_stock} | Score: {score:+.3f} | Confidence: {confidence:.1f}%
-                </p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        # Trade recommendation header
+        st.header(f"Signal for {selected_stock}")
+        render_trade_recommendation(prediction, trade_levels, oi_result, technical_result)
 
-        # Confidence gauge
+        # Confidence gauge + component weights
         col_gauge, col_weights = st.columns([1, 1])
         with col_gauge:
             gauge_fig = render_gauge_chart(confidence, action)
@@ -3054,12 +3524,16 @@ def main():
             st.subheader("Component Weights")
             weights = prediction.get("weights", {})
             components = prediction.get("components", {})
+            comp_labels = {
+                "technical": "Technical", "fundamental": "Fundamental",
+                "sentiment": "Sentiment", "open_interest": "Open Interest (OI)",
+            }
             for comp_name, weight in weights.items():
                 comp_score = components.get(comp_name, 0)
-                label = comp_name.capitalize()
+                label = comp_labels.get(comp_name, comp_name.capitalize())
                 color = "#00c853" if comp_score > 0.1 else "#ff1744" if comp_score < -0.1 else "#ffc107"
                 st.markdown(
-                    f"**{label}** (weight: {weight*100:.0f}%) â "
+                    f"**{label}** (weight: {weight*100:.0f}%) — "
                     f"Score: <span style='color:{color}'>{comp_score:+.3f}</span>",
                     unsafe_allow_html=True,
                 )
