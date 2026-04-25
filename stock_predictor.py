@@ -23,6 +23,11 @@ import io
 import json
 import os
 
+@st.cache_resource(show_spinner=False)
+def _get_vader_analyzer():
+    """Initialize VADER once per process; lexicon load is expensive on cold start."""
+    return SentimentIntensityAnalyzer()
+
 # Technical analysis constants
 SMA_SHORT = 20
 SMA_LONG = 50
@@ -1359,7 +1364,7 @@ def calculate_trade_levels(technical, prediction_action):
 
 def analyze_sentiment(news_dict):
     """Analyze sentiment of news headlines using VADER."""
-    analyzer = SentimentIntensityAnalyzer()
+    analyzer = _get_vader_analyzer()
 
     category_scores = {}
     total_headlines = 0
