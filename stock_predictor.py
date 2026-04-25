@@ -18,6 +18,7 @@ import plotly.graph_objects as go
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus
+from concurrent.futures import ThreadPoolExecutor
 import io
 import json
 import os
@@ -1080,9 +1081,12 @@ def fetch_oi_data(symbol_base):
             "Referer": "https://www.nseindia.com/option-chain",
             "Connection": "keep-alive",
         }
-        session.get("https://www.nseindia.com", headers=headers, timeout=6)
+        try:
+            session.get("https://www.nseindia.com", headers=headers, timeout=3)
+        except Exception:
+            pass  # Proceed without cookies; NSE may still respond
         url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol_base.upper()}"
-        resp = session.get(url, headers=headers, timeout=6)
+        resp = session.get(url, headers=headers, timeout=4)
         if resp.status_code != 200:
             return {"status": "error"}
         data = resp.json()
@@ -3127,8 +3131,14 @@ def _show_disclaimer_modal():
 def main():
     st.set_page_config(
         page_title="Stock Market Analysis Tool",
-        page_icon="chart_with_upwards_trend",
+        page_icon="📈",
         layout="wide",
+    )
+
+    # Inject Material Symbols font so sidebar icons render correctly on all hosts
+    st.markdown(
+        '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap" />',
+        unsafe_allow_html=True,
     )
 
     # Show disclaimer modal on first visit (session-scoped)
@@ -3461,37 +3471,30 @@ def main():
         with st.sidebar:
             st.markdown(f"**Sector:** {sector}")
 
-        with st.spinner("Fetching news headlines..."):
-            news_data = fetch_news_headlines(selected_stock, sector, market=market)
+        # Fetch news and OI in parallel (both are network-bound)
+        symbol_base = ticker.replace(".NS", "") if market == "India" else None
+        with st.spinner("Fetching news & market data..."):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                news_future = pool.submit(fetch_news_headlines, selected_stock, sector, market)
+                oi_future = pool.submit(fetch_oi_data, symbol_base) if symbol_base else None
+            news_data = news_future.result()
+            oi_result = oi_future.result() if oi_future else {"status": "error"}
 
-        # Run analyses
-        with st.spinner("Running technical analysis..."):
+        # Run all local analyses (CPU-bound, no network)
+        with st.spinner("Running analysis..."):
             technical_result = calculate_technical_indicators(stock_data["history"])
-
-        with st.spinner("Running sentiment analysis..."):
             sentiment_result = analyze_sentiment(news_data)
-
-        with st.spinner("Running fundamental analysis..."):
             fundamental_result = analyze_fundamentals(
                 stock_data.get("quarterly_income"),
                 stock_data.get("info", {}),
                 balance_sheet_df=stock_data.get("quarterly_balance"),
             )
-
-        with st.spinner("Computing key metrics..."):
             key_metrics = compute_key_metrics(
                 stock_data.get("info", {}),
                 stock_data.get("annual_income"),
                 stock_data.get("annual_balance"),
                 stock_data.get("cashflow"),
             )
-
-        # Fetch OI (India F&O stocks only)
-        oi_result = {"status": "error"}
-        if market == "India":
-            symbol_base = ticker.replace(".NS", "")
-            with st.spinner("Fetching Open Interest data..."):
-                oi_result = fetch_oi_data(symbol_base)
 
         # Generate prediction
         prediction = generate_prediction(technical_result, sentiment_result, fundamental_result, oi_data=oi_result)
