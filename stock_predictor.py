@@ -2787,6 +2787,159 @@ def run_daily_picks(stocks_dict, market="India", max_scan=300):
     return results, macro_sentiment_score, macro_headlines
 
 
+def generate_morning_report(picks_results):
+    """Distil full scan results into top BUY and SELL/SHORT picks."""
+    buy_setups  = {"Momentum Breakout", "Pullback Entry", "Oversold Reversal"}
+    sell_setups = {"Overbought — Avoid", "Bearish — Avoid"}
+
+    buys  = sorted(
+        [r for r in picks_results if r["Setup"] in buy_setups],
+        key=lambda x: x["Swing Score"], reverse=True
+    )[:10]
+
+    sells = sorted(
+        [r for r in picks_results if r["Setup"] in sell_setups],
+        key=lambda x: x["Swing Score"], reverse=True
+    )[:5]
+
+    return {"buys": buys, "sells": sells, "total_scanned": len(picks_results)}
+
+
+def render_morning_report(report, macro_score, macro_headlines, scan_universe, scan_date):
+    """Render the formatted morning report."""
+    buys  = report.get("buys", [])
+    sells = report.get("sells", [])
+    total = report.get("total_scanned", 0)
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    macro_color = "#00c853" if macro_score > 0.05 else "#ff1744" if macro_score < -0.05 else "#ff8f00"
+    macro_label = "Positive" if macro_score > 0.05 else "Negative" if macro_score < -0.05 else "Neutral"
+
+    st.markdown(
+        f"<div style='border:1px solid #e0e0e0;border-radius:10px;padding:16px 20px;"
+        f"background:#fafafa;margin-bottom:20px;'>"
+        f"<h3 style='margin:0;'>Morning Report — {scan_date}</h3>"
+        f"<p style='margin:6px 0 0 0;color:#555;'>"
+        f"Universe: <b>{scan_universe}</b> &nbsp;|&nbsp; "
+        f"Stocks scanned: <b>{total}</b> &nbsp;|&nbsp; "
+        f"Global Macro: <b style='color:{macro_color};'>{macro_label}</b> ({macro_score:+.3f})"
+        f"</p></div>",
+        unsafe_allow_html=True,
+    )
+
+    def _card(rank, pick, side):
+        """Render one stock card."""
+        is_buy  = side == "BUY"
+        hdr_bg  = "#e8f5e9" if is_buy else "#ffebee"
+        hdr_col = "#2e7d32" if is_buy else "#c62828"
+        badge   = "🟢 BUY" if is_buy else "🔴 SHORT"
+
+        entry_lo = pick.get("Target")  # repurposed: show price
+        price    = pick.get("Price", "N/A")
+        target   = pick.get("Target", "N/A")
+        sl       = pick.get("Stop Loss", "N/A")
+        rr       = pick.get("R:R", "N/A")
+        score    = pick.get("Swing Score", 0)
+        rsi      = pick.get("RSI", "N/A")
+        macd     = pick.get("MACD", "N/A")
+        vol      = pick.get("Vol Ratio", "N/A")
+        bb       = pick.get("BB%", "N/A")
+        why      = pick.get("Reasons", "")
+        setup    = pick.get("Setup", "")
+
+        reasons_html = "".join(
+            f"<li style='margin:2px 0;'>{r.strip()}</li>"
+            for r in why.split("|") if r.strip()
+        )
+
+        st.markdown(
+            f"<div style='border:1px solid {hdr_col}40;border-radius:8px;margin-bottom:12px;overflow:hidden;'>"
+            f"<div style='background:{hdr_bg};padding:10px 14px;display:flex;justify-content:space-between;align-items:center;'>"
+            f"  <span style='font-weight:700;font-size:1.05em;color:{hdr_col};'>#{rank} &nbsp; {pick['Stock']}</span>"
+            f"  <span style='background:{hdr_col};color:white;padding:3px 10px;border-radius:12px;font-size:0.82em;font-weight:700;'>{badge}</span>"
+            f"</div>"
+            f"<div style='padding:10px 14px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;'>"
+            f"  <div><span style='color:#888;font-size:0.78em;'>SETUP</span><br><b>{setup}</b></div>"
+            f"  <div><span style='color:#888;font-size:0.78em;'>CMP</span><br><b>₹{price}</b></div>"
+            f"  <div><span style='color:#888;font-size:0.78em;'>CONFIDENCE</span><br>"
+            f"    <b style='color:{hdr_col};'>{score}%</b></div>"
+            f"  <div><span style='color:#888;font-size:0.78em;'>TARGET</span><br>"
+            f"    <b style='color:#2e7d32;'>₹{target}</b></div>"
+            f"  <div><span style='color:#888;font-size:0.78em;'>STOP LOSS</span><br>"
+            f"    <b style='color:#c62828;'>₹{sl}</b></div>"
+            f"  <div><span style='color:#888;font-size:0.78em;'>RISK:REWARD</span><br><b>{rr}x</b></div>"
+            f"</div>"
+            f"<div style='padding:4px 14px 10px;display:flex;gap:16px;flex-wrap:wrap;'>"
+            f"  <span style='font-size:0.8em;color:#555;'>RSI <b>{rsi}</b></span>"
+            f"  <span style='font-size:0.8em;color:#555;'>MACD <b>{macd}</b></span>"
+            f"  <span style='font-size:0.8em;color:#555;'>Vol <b>{vol}x</b></span>"
+            f"  <span style='font-size:0.8em;color:#555;'>BB% <b>{bb}%</b></span>"
+            f"</div>"
+            f"<div style='padding:0 14px 10px;'>"
+            f"  <span style='font-size:0.78em;color:#666;'>Why: </span>"
+            f"  <ul style='margin:2px 0;padding-left:18px;font-size:0.8em;color:#444;'>{reasons_html}</ul>"
+            f"</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    # ── BUY section ───────────────────────────────────────────────────────────
+    st.markdown(f"### 🟢 Top BUY Picks ({len(buys)} stocks)")
+    if buys:
+        for i, pick in enumerate(buys, 1):
+            _card(i, pick, "BUY")
+    else:
+        st.info("No strong BUY setups found today. Market may be broadly overbought or neutral.")
+
+    st.markdown("---")
+
+    # ── SELL / SHORT section ──────────────────────────────────────────────────
+    st.markdown(f"### 🔴 Top SELL / SHORT Picks ({len(sells)} stocks)")
+    st.caption("These stocks show overbought or bearish breakdown signals. Suitable for short-term shorts or avoid-list.")
+    if sells:
+        for i, pick in enumerate(sells, 1):
+            _card(i, pick, "SELL")
+    else:
+        st.info("No strong SELL setups found today.")
+
+    st.markdown("---")
+
+    # ── Download ─────────────────────────────────────────────────────────────
+    all_picks = (
+        [{"Side": "BUY",  **p} for p in buys] +
+        [{"Side": "SHORT", **p} for p in sells]
+    )
+    if all_picks:
+        import csv, io as _io
+        buf = _io.StringIO()
+        fieldnames = ["Side", "Stock", "Ticker", "Setup", "Swing Score",
+                      "Price", "Target", "Stop Loss", "R:R", "RSI", "MACD",
+                      "Vol Ratio", "BB%", "52W%", "Reasons"]
+        writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(all_picks)
+        st.download_button(
+            label="Download Report as CSV",
+            data=buf.getvalue(),
+            file_name=f"morning_report_{scan_date}.csv",
+            mime="text/csv",
+        )
+
+    # ── Macro headlines ───────────────────────────────────────────────────────
+    if macro_headlines:
+        with st.expander(f"Global Macro Context ({len(macro_headlines)} headlines)"):
+            vader = _get_vader_analyzer()
+            for h in macro_headlines[:15]:
+                title = h.get("title", "")
+                sc = vader.polarity_scores(title)["compound"]
+                c = "#00c853" if sc > 0.1 else "#ff1744" if sc < -0.1 else "#888"
+                st.markdown(
+                    f"<span style='color:{c}'>[{sc:+.2f}]</span> {title} "
+                    f"<span style='color:gray;font-size:0.82em'>— {h.get('source','')}</span>",
+                    unsafe_allow_html=True,
+                )
+
+
 def render_daily_picks(results, macro_score, macro_headlines, market="India"):
     """Render daily trade picks with macro context."""
     # Global macro sentiment banner
@@ -3731,7 +3884,7 @@ def main():
             input_mode = st.radio(
                 "How do you want to select a stock?",
                 options=["Browse by Category", "Browse by Sector", "Enter Custom Ticker",
-                         "Stock Screener", "Daily Trade Picks", "My Watchlists"],
+                         "Stock Screener", "Daily Trade Picks", "Morning Report", "My Watchlists"],
                 horizontal=True,
             )
 
@@ -3804,6 +3957,9 @@ def main():
                     ticker = None
                     stock_name = None
             elif input_mode == "Daily Trade Picks":
+                ticker = None
+                stock_name = None
+            elif input_mode == "Morning Report":
                 ticker = None
                 stock_name = None
             elif input_mode == "My Watchlists":
@@ -3881,11 +4037,14 @@ def main():
         # Screener mode variables
         screener_mode = input_mode == "Stock Screener"
         daily_picks_mode = (market == "India" and input_mode == "Daily Trade Picks")
+        morning_report_mode = (market == "India" and input_mode == "Morning Report")
         watchlist_mode = (market == "India" and input_mode == "My Watchlists")
         screener_stocks = {}
         screener_btn = False
         analyze_btn = False
         daily_picks_btn = False
+        mr_generate_btn = False
+        mr_universe = "Nifty 500 (live)"
 
         if screener_mode:
             if market == "India":
@@ -4055,6 +4214,30 @@ def main():
                     use_container_width=True,
                     key="run_screener_btn",
                 )
+        elif morning_report_mode:
+            st.markdown("**Morning Report** — daily ranked BUY & SHORT picks from your chosen universe.")
+            _wl_mr = load_watchlists()
+            _wl_mr_names = [f"Watchlist: {n}" for n in _wl_mr]
+            mr_universe = st.selectbox(
+                "Universe",
+                ["Nifty 500 (live)", "Nifty Midcap 150 (live)", "Nifty Smallcap 250 (live)",
+                 "Curated 300"] + _wl_mr_names,
+                key="mr_universe",
+            )
+            _today_str = datetime.now().strftime("%Y-%m-%d")
+            _cached_date = st.session_state.get("mr_cached_date")
+            _cached_univ = st.session_state.get("mr_cached_universe")
+            if _cached_date == _today_str and _cached_univ == mr_universe:
+                st.success(f"Report ready for {_today_str}")
+            else:
+                st.info("Click Generate to build today's report.")
+            mr_generate_btn = st.button(
+                "Generate Morning Report",
+                type="primary",
+                use_container_width=True,
+                key="mr_generate_btn",
+            )
+
         elif daily_picks_mode:
             st.markdown("**Daily Trade Picks** scans your chosen universe for today's best swing/momentum setups, factoring in global macro news.")
             # Load watchlists so user can scan their own groups
@@ -4241,6 +4424,71 @@ def main():
             "Past performance does not guarantee future results. Data may be delayed or inaccurate. "
             "Always consult a qualified, licensed financial adviser before making investment decisions."
         )
+    elif morning_report_mode:
+        st.title("Morning Report")
+        _today_str = datetime.now().strftime("%Y-%m-%d")
+        _cached_date = st.session_state.get("mr_cached_date")
+        _cached_univ = st.session_state.get("mr_cached_universe")
+        report_ready = (_cached_date == _today_str and _cached_univ == mr_universe
+                        and st.session_state.get("mr_report") is not None)
+
+        if mr_generate_btn or not report_ready:
+            if mr_generate_btn:
+                # Resolve universe
+                _mr_idx_map = {
+                    "Nifty 500 (live)":          "nifty500",
+                    "Nifty Midcap 150 (live)":   "midcap150",
+                    "Nifty Smallcap 250 (live)": "smallcap250",
+                    "Curated 300":               None,
+                }
+                _mr_wl_name = mr_universe[len("Watchlist: "):] if mr_universe.startswith("Watchlist: ") else None
+                _mr_idx_key = _mr_idx_map.get(mr_universe)
+
+                with st.spinner("Fetching universe..."):
+                    if _mr_wl_name:
+                        _all_wl_mr = load_watchlists()
+                        mr_stocks = _all_wl_mr.get(_mr_wl_name, {})
+                    elif _mr_idx_key:
+                        mr_stocks = fetch_nse_index_constituents(_mr_idx_key)
+                        if not mr_stocks:
+                            _fb_map = {
+                                "nifty500": None, "midcap150": MIDCAP_STOCKS,
+                                "smallcap250": SMALLCAP_STOCKS,
+                            }
+                            fb = _fb_map.get(_mr_idx_key) or {}
+                            if not fb:
+                                for d in STOCK_CATEGORIES.values():
+                                    fb.update(d)
+                            st.warning(f"Live fetch failed — using curated fallback ({len(fb)} stocks).")
+                            mr_stocks = fb
+                    else:
+                        mr_stocks = {}
+                        for d in STOCK_CATEGORIES.values():
+                            mr_stocks.update(d)
+
+                if not mr_stocks:
+                    st.error("Could not load universe. Check your watchlist or try again.")
+                else:
+                    st.info(f"Scanning {len(mr_stocks)} stocks for {_today_str}... this may take a few minutes.")
+                    mr_results, mr_macro, mr_headlines = run_daily_picks(
+                        mr_stocks, market="India", max_scan=len(mr_stocks)
+                    )
+                    mr_report = generate_morning_report(mr_results)
+                    st.session_state["mr_report"]           = mr_report
+                    st.session_state["mr_macro"]            = mr_macro
+                    st.session_state["mr_headlines"]        = mr_headlines
+                    st.session_state["mr_cached_date"]      = _today_str
+                    st.session_state["mr_cached_universe"]  = mr_universe
+                    st.rerun()
+
+        mr_report    = st.session_state.get("mr_report")
+        mr_macro     = st.session_state.get("mr_macro", 0.0)
+        mr_headlines = st.session_state.get("mr_headlines", [])
+        if mr_report:
+            render_morning_report(mr_report, mr_macro, mr_headlines, mr_universe, _today_str)
+        elif not mr_generate_btn:
+            st.info("Select a universe in the sidebar and click **Generate Morning Report**.")
+
     elif watchlist_mode:
         render_watchlist_manager(market=market)
 
