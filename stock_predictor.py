@@ -3548,6 +3548,11 @@ def main():
         layout="wide",
     )
 
+    # Send an immediate empty write so the WebSocket has traffic right away.
+    # Without this, Railway's reverse proxy can drop the WebSocket connection
+    # before Streamlit finishes building the page (Railway idle-timeout ~2 min).
+    st.write("")
+
     # Inject Material Symbols font so sidebar icons render correctly on all hosts
     st.markdown(
         '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap" />',
