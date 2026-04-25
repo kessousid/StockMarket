@@ -2090,6 +2090,28 @@ def compute_key_metrics(info, annual_income, annual_balance, cashflow):
 # =============================================================================
 
 SAVED_SCREENS_FILE = "saved_screens.json"
+WATCHLISTS_FILE = "watchlists.json"
+
+
+def load_watchlists():
+    """Load user-defined watchlists from JSON. Returns {name: {stock_name: ticker}}."""
+    try:
+        if os.path.exists(WATCHLISTS_FILE):
+            with open(WATCHLISTS_FILE, "r") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def save_watchlists(watchlists):
+    """Persist watchlists dict to JSON file."""
+    try:
+        with open(WATCHLISTS_FILE, "w") as f:
+            json.dump(watchlists, f, indent=2)
+    except Exception:
+        pass
+
 
 SCREENER_FIELDS = {
     # Signal
@@ -3482,6 +3504,121 @@ def render_trade_recommendation(prediction, trade_levels, oi_data, technical):
         )
 
 
+def render_watchlist_manager(market="India"):
+    """Full-page UI to create, edit and delete named stock watchlists."""
+    st.header("My Watchlists")
+    st.caption("Create named groups of stocks. Use them in Daily Trade Picks or the Screener.")
+
+    if "watchlists" not in st.session_state:
+        st.session_state["watchlists"] = load_watchlists()
+    wl = st.session_state["watchlists"]
+
+    # ── Left: list of existing watchlists ────────────────────────────────────
+    col_list, col_edit = st.columns([1, 2])
+
+    with col_list:
+        st.subheader("Your Groups")
+        if not wl:
+            st.info("No watchlists yet. Create one on the right.")
+        else:
+            for name in list(wl.keys()):
+                n_stocks = len(wl[name])
+                btn_col, del_col = st.columns([3, 1])
+                with btn_col:
+                    if st.button(f"**{name}** ({n_stocks} stocks)", key=f"wl_select_{name}",
+                                 use_container_width=True):
+                        st.session_state["wl_active"] = name
+                        st.rerun()
+                with del_col:
+                    if st.button("🗑", key=f"wl_del_{name}", help=f"Delete {name}"):
+                        del wl[name]
+                        save_watchlists(wl)
+                        if st.session_state.get("wl_active") == name:
+                            st.session_state.pop("wl_active", None)
+                        st.rerun()
+
+        st.markdown("---")
+        st.markdown("**Create new watchlist**")
+        new_name = st.text_input("Group name", placeholder="e.g. My Pharma Picks",
+                                  key="wl_new_name")
+        if st.button("+ Create", use_container_width=True, key="wl_create_btn"):
+            if new_name.strip() and new_name.strip() not in wl:
+                wl[new_name.strip()] = {}
+                save_watchlists(wl)
+                st.session_state["wl_active"] = new_name.strip()
+                st.rerun()
+            elif new_name.strip() in wl:
+                st.warning("A watchlist with that name already exists.")
+            else:
+                st.warning("Please enter a name.")
+
+    # ── Right: edit the selected watchlist ───────────────────────────────────
+    with col_edit:
+        active = st.session_state.get("wl_active")
+        if not active or active not in wl:
+            st.info("Select a watchlist on the left to edit it, or create a new one.")
+        else:
+            st.subheader(f"Editing: {active}")
+            stocks_in_group = wl[active]
+
+            # Add stock
+            st.markdown("**Add a stock**")
+            add_col1, add_col2 = st.columns([3, 1])
+            with add_col1:
+                add_input = st.text_input("Stock name or NSE symbol",
+                                           placeholder="e.g. Reliance or ZOMATO",
+                                           key="wl_add_input")
+            with add_col2:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("Add", key="wl_add_btn", use_container_width=True):
+                    if add_input.strip():
+                        ticker_found, name_found = resolve_ticker(add_input.strip(),
+                                                                   market="NSE" if market == "India" else "US")
+                        if ticker_found:
+                            stocks_in_group[name_found] = ticker_found
+                            wl[active] = stocks_in_group
+                            save_watchlists(wl)
+                            st.success(f"Added: {name_found} ({ticker_found})")
+                            st.rerun()
+                        else:
+                            st.error(f"Could not find '{add_input}'. Try the exact NSE symbol.")
+
+            # Current stocks table
+            if not stocks_in_group:
+                st.info("No stocks yet. Add some above.")
+            else:
+                st.markdown(f"**{len(stocks_in_group)} stocks in this group:**")
+                for sname, sticker in list(stocks_in_group.items()):
+                    sc1, sc2, sc3 = st.columns([3, 2, 1])
+                    sc1.markdown(sname)
+                    sc2.markdown(f"`{sticker}`")
+                    if sc3.button("Remove", key=f"wl_rm_{sticker}"):
+                        del stocks_in_group[sname]
+                        wl[active] = stocks_in_group
+                        save_watchlists(wl)
+                        st.rerun()
+
+                st.markdown("---")
+                # Bulk add from a category or sector
+                st.markdown("**Bulk add from a category/sector**")
+                bulk_src = st.selectbox(
+                    "Add all stocks from",
+                    ["— select —"] + list(STOCK_CATEGORIES.keys()) + sorted(STOCK_SECTORS.keys()),
+                    key="wl_bulk_src",
+                )
+                if st.button("Bulk Add", key="wl_bulk_btn") and bulk_src != "— select —":
+                    src_dict = STOCK_CATEGORIES.get(bulk_src) or STOCK_SECTORS.get(bulk_src, {})
+                    added = 0
+                    for sn, st_ticker in src_dict.items():
+                        if sn not in stocks_in_group:
+                            stocks_in_group[sn] = st_ticker
+                            added += 1
+                    wl[active] = stocks_in_group
+                    save_watchlists(wl)
+                    st.success(f"Added {added} stocks from '{bulk_src}'.")
+                    st.rerun()
+
+
 # =============================================================================
 # Section 10: Main App
 # =============================================================================
@@ -3593,7 +3730,8 @@ def main():
             st.header("Indian Stock Market")
             input_mode = st.radio(
                 "How do you want to select a stock?",
-                options=["Browse by Category", "Browse by Sector", "Enter Custom Ticker", "Stock Screener", "Daily Trade Picks"],
+                options=["Browse by Category", "Browse by Sector", "Enter Custom Ticker",
+                         "Stock Screener", "Daily Trade Picks", "My Watchlists"],
                 horizontal=True,
             )
 
@@ -3668,6 +3806,9 @@ def main():
             elif input_mode == "Daily Trade Picks":
                 ticker = None
                 stock_name = None
+            elif input_mode == "My Watchlists":
+                ticker = None
+                stock_name = None
             else:
                 # Stock Screener mode
                 ticker = None
@@ -3740,6 +3881,7 @@ def main():
         # Screener mode variables
         screener_mode = input_mode == "Stock Screener"
         daily_picks_mode = (market == "India" and input_mode == "Daily Trade Picks")
+        watchlist_mode = (market == "India" and input_mode == "My Watchlists")
         screener_stocks = {}
         screener_btn = False
         analyze_btn = False
@@ -3747,11 +3889,14 @@ def main():
 
         if screener_mode:
             if market == "India":
+                _wl_for_screener = load_watchlists()
+                _wl_scope_names = [f"Watchlist: {n}" for n in _wl_for_screener]
                 scope_options = (
                     ["All NSE Stocks", "Nifty 500 (live)", "Nifty Midcap 150 (live)",
                      "Nifty Smallcap 250 (live)", "Nifty Microcap 250 (live)", "Curated Stocks"]
                     + list(STOCK_CATEGORIES.keys())
                     + sorted(STOCK_SECTORS.keys())
+                    + _wl_scope_names
                 )
                 screener_scope = st.selectbox("Screener Scope", options=scope_options)
 
@@ -3796,6 +3941,11 @@ def main():
                         screener_stocks = STOCK_CATEGORIES[screener_scope]
                 elif screener_scope in STOCK_SECTORS:
                     screener_stocks = STOCK_SECTORS[screener_scope]
+                elif screener_scope.startswith("Watchlist: "):
+                    _wl_name = screener_scope[len("Watchlist: "):]
+                    screener_stocks = _wl_for_screener.get(_wl_name, {})
+                    if not screener_stocks:
+                        st.warning(f"Watchlist '{_wl_name}' is empty. Add stocks in 'My Watchlists'.")
             else:
                 # US screener
                 scope_options = (
@@ -3907,10 +4057,13 @@ def main():
                 )
         elif daily_picks_mode:
             st.markdown("**Daily Trade Picks** scans your chosen universe for today's best swing/momentum setups, factoring in global macro news.")
+            # Load watchlists so user can scan their own groups
+            _wl_for_picks = load_watchlists()
+            _wl_names = [f"Watchlist: {n}" for n in _wl_for_picks]
             picks_universe = st.selectbox(
                 "Scan Universe",
                 ["Nifty 500 (live, ~500 stocks)", "Nifty Midcap 150 (live)", "Nifty Smallcap 250 (live)",
-                 "Curated 300 (fast)"],
+                 "Curated 300 (fast)"] + _wl_names,
             )
             # Default and max match the selected universe — no silent truncation
             _universe_size = {
@@ -3919,7 +4072,12 @@ def main():
                 "Nifty Smallcap 250 (live)":     250,
                 "Curated 300 (fast)":             300,
             }
-            _default_scan = _universe_size.get(picks_universe, 500)
+            if picks_universe.startswith("Watchlist: "):
+                _wl_n = picks_universe[len("Watchlist: "):]
+                _wl_sz = len(_wl_for_picks.get(_wl_n, {}))
+                _default_scan = max(_wl_sz, 1)
+            else:
+                _default_scan = _universe_size.get(picks_universe, 500)
             max_scan = st.slider(
                 "Max stocks to scan",
                 min_value=50,
@@ -4083,6 +4241,9 @@ def main():
             "Past performance does not guarantee future results. Data may be delayed or inaccurate. "
             "Always consult a qualified, licensed financial adviser before making investment decisions."
         )
+    elif watchlist_mode:
+        render_watchlist_manager(market=market)
+
     elif daily_picks_mode:
         st.header("Daily Trade Picks")
         st.caption("Swing & momentum setups filtered from today's market, adjusted for global macro news.")
@@ -4095,6 +4256,12 @@ def main():
             "Nifty Smallcap 250 (live)":     ("smallcap250", SMALLCAP_STOCKS),
             "Curated 300 (fast)":            (None,          None),
         }
+
+        # Check if user selected one of their own watchlists
+        _picks_wl_name = None
+        if picks_universe.startswith("Watchlist: "):
+            _picks_wl_name = picks_universe[len("Watchlist: "):]
+
         idx_key, curated_fallback = universe_map.get(picks_universe, (None, None))
 
         def _build_curated_all():
@@ -4107,10 +4274,15 @@ def main():
 
         if daily_picks_btn:
             with st.spinner("Fetching stock universe..."):
-                if idx_key:
+                if _picks_wl_name:
+                    # User selected one of their own watchlists
+                    _all_wl = load_watchlists()
+                    universe = _all_wl.get(_picks_wl_name, {})
+                    if not universe:
+                        st.error(f"Watchlist '{_picks_wl_name}' is empty or not found. Add stocks first.")
+                elif idx_key:
                     universe = fetch_nse_index_constituents(idx_key)
                     if not universe:
-                        # Use the matching curated dict, not the whole combined list
                         fallback = curated_fallback or _build_curated_all()
                         st.warning(
                             f"Live NSE fetch failed — using curated {picks_universe.split('(')[0].strip()} "
