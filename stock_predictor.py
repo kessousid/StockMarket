@@ -948,36 +948,58 @@ def fetch_stock_data(ticker):
         return {"status": "error", "message": str(e)}
 
 
+def _parse_nse_index_csv(text):
+    """Parse NSE index constituent CSV into {name: ticker} dict."""
+    import pandas as pd
+    df = pd.read_csv(io.StringIO(text))
+    stocks = {}
+    for _, row in df.iterrows():
+        symbol = str(row.get("Symbol", "")).strip()
+        name = str(row.get("Company Name", "")).strip()
+        if symbol and name and symbol != "nan" and name != "nan":
+            stocks[name] = f"{symbol}.NS"
+    return stocks
+
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_nse_index_constituents(index_key):
-    """Fetch live NSE index constituents from niftyindices.com (updated daily by NSE)."""
-    urls = {
+    """Fetch live NSE index constituents — tries NSE archives first, then niftyindices.com."""
+    # NSE archives (same domain as EQUITY_L.csv which works on Railway)
+    archive_urls = {
+        "midcap150":   "https://nsearchives.nseindia.com/content/indices/ind_niftymidcap150list.csv",
+        "smallcap250": "https://nsearchives.nseindia.com/content/indices/ind_niftysmallcap250list.csv",
+        "microcap250": "https://nsearchives.nseindia.com/content/indices/ind_niftymicrocap250list.csv",
+        "nifty500":    "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv",
+        "niftynext50": "https://nsearchives.nseindia.com/content/indices/ind_niftynext50list.csv",
+    }
+    # niftyindices.com as secondary fallback
+    niftyindices_urls = {
         "midcap150":   "https://www.niftyindices.com/IndexConstituents/ind_niftymidcap150list.csv",
         "smallcap250": "https://www.niftyindices.com/IndexConstituents/ind_niftysmallcap250list.csv",
         "microcap250": "https://www.niftyindices.com/IndexConstituents/ind_niftymicrocap250list.csv",
         "nifty500":    "https://www.niftyindices.com/IndexConstituents/ind_nifty500list.csv",
         "niftynext50": "https://www.niftyindices.com/IndexConstituents/ind_niftynext50list.csv",
     }
-    url = urls.get(index_key)
-    if not url:
-        return {}
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-        "Referer": "https://www.niftyindices.com/",
-    }
-    try:
-        resp = requests.get(url, headers=headers, timeout=12)
-        resp.raise_for_status()
-        df = pd.read_csv(io.StringIO(resp.text))
-        stocks = {}
-        for _, row in df.iterrows():
-            symbol = str(row.get("Symbol", "")).strip()
-            name = str(row.get("Company Name", "")).strip()
-            if symbol and name and symbol != "nan":
-                stocks[name] = f"{symbol}.NS"
-        return stocks
-    except Exception:
-        return {}
+
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
+    for url_map, extra_headers in [
+        (archive_urls, {}),
+        (niftyindices_urls, {"Referer": "https://www.niftyindices.com/"}),
+    ]:
+        url = url_map.get(index_key)
+        if not url:
+            continue
+        try:
+            resp = requests.get(url, headers={**headers, **extra_headers}, timeout=12)
+            resp.raise_for_status()
+            result = _parse_nse_index_csv(resp.text)
+            if result:
+                return result
+        except Exception:
+            continue
+
+    return {}
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -4049,31 +4071,37 @@ def main():
         st.caption("Swing & momentum setups filtered from today's market, adjusted for global macro news.")
 
         # Resolve universe
+        # Maps display name → (nse_key, curated_fallback_dict)
         universe_map = {
-            "Nifty 500 (live, ~500 stocks)": ("nifty500", None),
-            "Nifty Midcap 150 (live)": ("midcap150", None),
-            "Nifty Smallcap 250 (live)": ("smallcap250", None),
-            "Curated 300 (fast)": (None, None),
+            "Nifty 500 (live, ~500 stocks)": ("nifty500",    None),
+            "Nifty Midcap 150 (live)":       ("midcap150",   MIDCAP_STOCKS),
+            "Nifty Smallcap 250 (live)":     ("smallcap250", SMALLCAP_STOCKS),
+            "Curated 300 (fast)":            (None,          None),
         }
-        idx_key, _ = universe_map.get(picks_universe, (None, None))
+        idx_key, curated_fallback = universe_map.get(picks_universe, (None, None))
+
+        def _build_curated_all():
+            result = {}
+            for cat_dict in STOCK_CATEGORIES.values():
+                for n, t in cat_dict.items():
+                    if t not in result.values():
+                        result[n] = t
+            return result
 
         if daily_picks_btn:
             with st.spinner("Fetching stock universe..."):
                 if idx_key:
                     universe = fetch_nse_index_constituents(idx_key)
                     if not universe:
-                        st.warning("Live fetch failed — falling back to curated list.")
-                        universe = {}
-                        for cat_dict in STOCK_CATEGORIES.values():
-                            for n, t in cat_dict.items():
-                                if t not in universe.values():
-                                    universe[n] = t
+                        # Use the matching curated dict, not the whole combined list
+                        fallback = curated_fallback or _build_curated_all()
+                        st.warning(
+                            f"Live NSE fetch failed — using curated {picks_universe.split('(')[0].strip()} "
+                            f"list ({len(fallback)} stocks) as fallback."
+                        )
+                        universe = fallback
                 else:
-                    universe = {}
-                    for cat_dict in STOCK_CATEGORIES.values():
-                        for n, t in cat_dict.items():
-                            if t not in universe.values():
-                                universe[n] = t
+                    universe = _build_curated_all()
 
             if not universe:
                 st.error("Could not build stock universe. Try again.")
