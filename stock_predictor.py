@@ -19,6 +19,16 @@ import io
 import json
 import os
 
+# Persistent data directory — set STOCKMARKET_DATA_DIR env var in Railway to a
+# mounted volume path (e.g. /data) so watchlists and saved screens survive deploys.
+# Falls back to current directory for local dev.
+_DATA_DIR = os.environ.get("STOCKMARKET_DATA_DIR", ".")
+if _DATA_DIR != "." and not os.path.exists(_DATA_DIR):
+    try:
+        os.makedirs(_DATA_DIR, exist_ok=True)
+    except Exception:
+        _DATA_DIR = "."
+
 # Heavy imports deferred to first use so Railway serves the first page faster
 def _yf():
     import yfinance as yf
@@ -2089,8 +2099,8 @@ def compute_key_metrics(info, annual_income, annual_balance, cashflow):
 # Section 7b: Screen Builder - Saved Screens and Filter Logic
 # =============================================================================
 
-SAVED_SCREENS_FILE = "saved_screens.json"
-WATCHLISTS_FILE = "watchlists.json"
+SAVED_SCREENS_FILE = os.path.join(_DATA_DIR, "saved_screens.json")
+WATCHLISTS_FILE    = os.path.join(_DATA_DIR, "watchlists.json")
 
 
 def load_watchlists():
@@ -4261,16 +4271,24 @@ def main():
                 _default_scan = max(_wl_sz, 1)
             else:
                 _default_scan = _universe_size.get(picks_universe, 500)
-            max_scan = st.slider(
-                "Max stocks to scan",
-                min_value=50,
-                max_value=_default_scan,
-                value=_default_scan,
-                step=50,
-                help="Scan all stocks in the universe for complete results. Reduce to speed up.",
-            )
-            _est_min = max_scan // 50  # rough estimate: ~50 stocks/min on Railway
-            st.caption(f"Scanning all {max_scan} stocks — estimated ~{_est_min} min on Railway.")
+
+            # Only show slider when universe is large enough for it to be meaningful.
+            # Slider requires min_value < max_value, so skip it for small watchlists.
+            if _default_scan <= 50:
+                max_scan = _default_scan
+                st.caption(f"Scanning all {max_scan} stock(s) in this universe.")
+            else:
+                _slider_min = min(50, _default_scan - 1)
+                max_scan = st.slider(
+                    "Max stocks to scan",
+                    min_value=_slider_min,
+                    max_value=_default_scan,
+                    value=_default_scan,
+                    step=50,
+                    help="Scan all stocks for complete results. Reduce to speed up.",
+                )
+                _est_min = max(1, max_scan // 50)
+                st.caption(f"Scanning {max_scan} stocks — estimated ~{_est_min} min on Railway.")
             daily_picks_btn = st.button("Run Today's Scan", type="primary", use_container_width=True)
         else:
             if ticker:
