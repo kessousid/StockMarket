@@ -4309,8 +4309,13 @@ def main():
             _wl_mr_names = [f"Watchlist: {n}" for n in _wl_mr]
             mr_universe = st.selectbox(
                 "Universe",
-                ["Nifty 500 (live)", "Nifty Midcap 150 (live)", "Nifty Smallcap 250 (live)",
-                 "Curated 300"] + _wl_mr_names,
+                [
+                    "All NSE Stocks (~2,100)  ⚠ ~40 min",
+                    "Nifty 500 (live)",
+                    "Nifty Midcap 150 (live)",
+                    "Nifty Smallcap 250 (live)",
+                    "Curated 300",
+                ] + _wl_mr_names,
                 key="mr_universe",
             )
             _today_str = datetime.now().strftime("%Y-%m-%d")
@@ -4334,15 +4339,26 @@ def main():
             _wl_names = [f"Watchlist: {n}" for n in _wl_for_picks]
             picks_universe = st.selectbox(
                 "Scan Universe",
-                ["Nifty 500 (live, ~500 stocks)", "Nifty Midcap 150 (live)", "Nifty Smallcap 250 (live)",
-                 "Curated 300 (fast)"] + _wl_names,
+                [
+                    "All NSE Stocks (~2,100)  ⚠ ~40 min",
+                    "Nifty 500 (live, ~500 stocks)",
+                    "Nifty Midcap 150 (live)",
+                    "Nifty Smallcap 250 (live)",
+                    "Curated 300 (fast)",
+                ] + _wl_names,
+            )
+            st.caption(
+                "**Index notes:** Nifty Midcap 150 = NSE's 150-stock midcap *index* (not all midcaps). "
+                "Nifty Smallcap 250 = NSE's 250-stock smallcap *index*. "
+                "Total NSE = ~2,100 listed stocks across all market caps."
             )
             # Default and max match the selected universe — no silent truncation
             _universe_size = {
-                "Nifty 500 (live, ~500 stocks)": 500,
-                "Nifty Midcap 150 (live)":       150,
-                "Nifty Smallcap 250 (live)":     250,
-                "Curated 300 (fast)":             300,
+                "All NSE Stocks (~2,100)  ⚠ ~40 min": 2100,
+                "Nifty 500 (live, ~500 stocks)":       500,
+                "Nifty Midcap 150 (live)":             150,
+                "Nifty Smallcap 250 (live)":           250,
+                "Curated 300 (fast)":                  300,
             }
             if picks_universe.startswith("Watchlist: "):
                 _wl_n = picks_universe[len("Watchlist: "):]
@@ -4533,10 +4549,11 @@ def main():
             if mr_generate_btn:
                 # Resolve universe
                 _mr_idx_map = {
-                    "Nifty 500 (live)":          "nifty500",
-                    "Nifty Midcap 150 (live)":   "midcap150",
-                    "Nifty Smallcap 250 (live)": "smallcap250",
-                    "Curated 300":               None,
+                    "All NSE Stocks (~2,100)  ⚠ ~40 min": "all_nse",
+                    "Nifty 500 (live)":                   "nifty500",
+                    "Nifty Midcap 150 (live)":            "midcap150",
+                    "Nifty Smallcap 250 (live)":          "smallcap250",
+                    "Curated 300":                        None,
                 }
                 _mr_wl_name = mr_universe[len("Watchlist: "):] if mr_universe.startswith("Watchlist: ") else None
                 _mr_idx_key = _mr_idx_map.get(mr_universe)
@@ -4545,6 +4562,15 @@ def main():
                     if _mr_wl_name:
                         _all_wl_mr = load_watchlists()
                         mr_stocks = _all_wl_mr.get(_mr_wl_name, {})
+                    elif _mr_idx_key == "all_nse":
+                        mr_stocks = fetch_all_nse_stocks()
+                        if not mr_stocks:
+                            st.warning("Could not fetch full NSE list. Falling back to curated stocks.")
+                            mr_stocks = {}
+                            for d in STOCK_CATEGORIES.values():
+                                mr_stocks.update(d)
+                        else:
+                            st.info(f"Loaded {len(mr_stocks):,} NSE-listed stocks.")
                     elif _mr_idx_key:
                         mr_stocks = fetch_nse_index_constituents(_mr_idx_key)
                         if not mr_stocks:
@@ -4595,11 +4621,13 @@ def main():
 
         # Resolve universe
         # Maps display name → (nse_key, curated_fallback_dict)
+        # "all_nse" is a special key handled separately via fetch_all_nse_stocks()
         universe_map = {
-            "Nifty 500 (live, ~500 stocks)": ("nifty500",    None),
-            "Nifty Midcap 150 (live)":       ("midcap150",   MIDCAP_STOCKS),
-            "Nifty Smallcap 250 (live)":     ("smallcap250", SMALLCAP_STOCKS),
-            "Curated 300 (fast)":            (None,          None),
+            "All NSE Stocks (~2,100)  ⚠ ~40 min": ("all_nse",    None),
+            "Nifty 500 (live, ~500 stocks)":       ("nifty500",   None),
+            "Nifty Midcap 150 (live)":             ("midcap150",  MIDCAP_STOCKS),
+            "Nifty Smallcap 250 (live)":           ("smallcap250",SMALLCAP_STOCKS),
+            "Curated 300 (fast)":                  (None,         None),
         }
 
         # Check if user selected one of their own watchlists
@@ -4620,11 +4648,17 @@ def main():
         if daily_picks_btn:
             with st.spinner("Fetching stock universe..."):
                 if _picks_wl_name:
-                    # User selected one of their own watchlists
                     _all_wl = load_watchlists()
                     universe = _all_wl.get(_picks_wl_name, {})
                     if not universe:
-                        st.error(f"Watchlist '{_picks_wl_name}' is empty or not found. Add stocks first.")
+                        st.error(f"Watchlist '{_picks_wl_name}' is empty or not found.")
+                elif idx_key == "all_nse":
+                    universe = fetch_all_nse_stocks()
+                    if not universe:
+                        st.warning("Could not fetch full NSE list. Falling back to curated stocks.")
+                        universe = _build_curated_all()
+                    else:
+                        st.info(f"Loaded {len(universe):,} NSE-listed stocks.")
                 elif idx_key:
                     universe = fetch_nse_index_constituents(idx_key)
                     if not universe:
