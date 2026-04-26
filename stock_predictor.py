@@ -1376,6 +1376,75 @@ def calculate_technical_indicators(price_df):
     w52_range = w52_high - w52_low
     w52_pct = (latest_price - w52_low) / w52_range if w52_range > 0 else 0.5  # 0=at low, 1=at high
 
+    # --- VWAP (Volume Weighted Average Price) — Critical for Intraday ---
+    if volume is not None and not volume.empty and len(volume) >= 10:
+        typical_price = (high + low + close) / 3
+        vwap_numerator = (typical_price * volume).rolling(window=20).sum()
+        vwap_denominator = volume.rolling(window=20).sum()
+        vwap = vwap_numerator / vwap_denominator.replace(0, 1)
+        latest_vwap = float(vwap.iloc[-1])
+        vwap_position = (latest_price - latest_vwap) / latest_vwap * 100 if latest_vwap else 0  # % above/below VWAP
+        vwap_signal = float(np.clip(vwap_position / 2, -1, 1))  # +1 if 2% above, -1 if 2% below
+    else:
+        latest_vwap = latest_price
+        vwap_position = 0
+        vwap_signal = 0.0
+
+    # --- 20 EMA (Short-term trend) & 50 EMA (Medium-term confirmation) ---
+    ema_20 = close.ewm(span=20, adjust=False).mean()
+    ema_50 = close.ewm(span=50, adjust=False).mean() if len(close) >= 50 else close.rolling(50).mean()
+    latest_ema20 = float(ema_20.iloc[-1])
+    latest_ema50 = float(ema_50.iloc[-1])
+
+    # Trend strength: how far price is from 20 EMA
+    ema20_distance = (latest_price - latest_ema20) / latest_ema20 * 100 if latest_ema20 else 0
+    ema_signal = 0.0
+    if latest_price > latest_ema20 and latest_ema20 > latest_ema50:
+        ema_signal = float(np.clip(ema20_distance / 3, 0, 1))  # Strong uptrend
+    elif latest_price < latest_ema20 and latest_ema20 < latest_ema50:
+        ema_signal = float(np.clip(ema20_distance / 3, -1, 0))  # Strong downtrend
+    else:
+        ema_signal = float(np.clip(ema20_distance / 5, -0.5, 0.5))  # Weak or sideways
+
+    # --- Support/Resistance (20-period recent swing highs/lows) ---
+    recent_high = high.tail(20).max()
+    recent_low = low.tail(20).min()
+    swing_distance_high = (recent_high - latest_price) / latest_price * 100 if latest_price else 0
+    swing_distance_low = (latest_price - recent_low) / latest_price * 100 if latest_price else 0
+
+    # --- Volume Spike Detection (breakout confirmation) ---
+    if volume is not None and not volume.empty and len(volume) >= 20:
+        vol_ma20 = volume.rolling(20).mean()
+        vol_current = float(volume.iloc[-1])
+        vol_avg = float(vol_ma20.iloc[-1]) if not pd.isna(vol_ma20.iloc[-1]) else vol_current
+        volume_spike = vol_current / vol_avg if vol_avg > 0 else 1.0
+        is_volume_spike = volume_spike > 1.3  # 30% above average
+    else:
+        volume_spike = 1.0
+        is_volume_spike = False
+
+    # --- Gap Detection (opening gap from previous close) ---
+    if len(close) >= 2 and len(high) >= 2:
+        prev_close = float(close.iloc[-2])
+        open_price = float(high.iloc[-1]) if 'Open' not in price_df.columns else float(price_df['Open'].iloc[-1])
+        gap_pct = (open_price - prev_close) / prev_close * 100 if prev_close else 0
+        has_gap = abs(gap_pct) > 1.0
+    else:
+        gap_pct = 0
+        has_gap = False
+
+    # --- CCI (Commodity Channel Index) - cyclical moves ---
+    if len(close) >= 20:
+        typical_price = (high + low + close) / 3
+        sma_tp = typical_price.rolling(20).mean()
+        mad = (typical_price - sma_tp).abs().rolling(20).mean()
+        cci = (typical_price - sma_tp) / (0.015 * mad.replace(0, 1))
+        latest_cci = float(cci.iloc[-1])
+        cci_signal = float(np.clip(latest_cci / 200, -1, 1))  # Normalize CCI
+    else:
+        latest_cci = 0
+        cci_signal = 0.0
+
     # --- Composite technical score ---
     composite = (
         sma_signal * TECH_SMA_WEIGHT
@@ -1384,6 +1453,8 @@ def calculate_technical_indicators(price_df):
         + bb_signal_val * TECH_BB_WEIGHT
         + obv_signal_val * TECH_OBV_WEIGHT
         + momentum_signal * TECH_MOMENTUM_WEIGHT
+        + vwap_signal * 0.10  # Add VWAP to composite
+        + ema_signal * 0.10   # Add EMA trend to composite
     )
 
     return {
@@ -1419,6 +1490,24 @@ def calculate_technical_indicators(price_df):
         "w52_high": round(w52_high, 2),
         "w52_low": round(w52_low, 2),
         "w52_pct": round(w52_pct * 100, 1),
+        # INTRADAY CRITICAL INDICATORS
+        "vwap": round(latest_vwap, 2),
+        "vwap_pct": round(vwap_position, 2),  # % above/below VWAP
+        "vwap_signal": vwap_signal,  # -1 to +1 signal
+        "ema_20": round(latest_ema20, 2),
+        "ema_50": round(latest_ema50, 2),
+        "ema_signal": ema_signal,  # Trend strength
+        "ema20_distance_pct": round(ema20_distance, 2),  # % price distance from EMA20
+        "recent_high": round(recent_high, 2),
+        "recent_low": round(recent_low, 2),
+        "swing_dist_high_pct": round(swing_distance_high, 2),  # % to 20-period resistance
+        "swing_dist_low_pct": round(swing_distance_low, 2),  # % to 20-period support
+        "volume_spike": round(volume_spike, 2),
+        "is_volume_spike": is_volume_spike,  # True if vol > 1.3x average
+        "gap_pct": round(gap_pct, 2),
+        "has_gap": has_gap,
+        "cci": round(latest_cci, 1),
+        "cci_signal": cci_signal,
     }
 
 
@@ -2711,14 +2800,59 @@ def _swing_trade_score(technical, fundamental, sentiment, macro_adj):
     sma_long = technical.get("sma_long", current_price or 1)
     macd_cross = technical.get("macd_crossover", "")
 
+    # INTRADAY-CRITICAL INDICATORS
+    ema20 = technical.get("ema_20", current_price or 1)
+    ema50 = technical.get("ema_50", current_price or 1)
+    vwap = technical.get("vwap", current_price or 1)
+    vwap_pct = technical.get("vwap_pct", 0)
+    is_vol_spike = technical.get("is_volume_spike", False)
+    has_gap = technical.get("has_gap", False)
+    gap_pct = technical.get("gap_pct", 0)
+    ema20_dist = technical.get("ema20_distance_pct", 0)
+    ema_signal_val = technical.get("ema_signal", 0)
+    cci = technical.get("cci", 0)
+
     reasons = []
     points = 0
 
-    # ── Step 1: Classify setup — priority order matters ──────────────────────
+    # ── Step 1: INTRADAY SETUPS (Priority: faster confirmation) ──────────────
 
+    # INTRADAY BREAKOUT: Price > EMA20 > EMA50 + Price > VWAP + Volume spike
+    if (current_price > ema20 > ema50 and current_price > vwap and is_vol_spike and
+        rsi <= 70 and macd_cross == "Bullish"):
+        setup = "Intraday Breakout"
+        reasons.append(f"Price above EMA20/EMA50 & VWAP, volume spike {vol_ratio:.1f}x")
+        reasons.append(f"RSI {rsi:.0f} momentum zone, MACD bullish")
+        points = 55
+
+    # INTRADAY PULLBACK: Price pulls to EMA20 in uptrend (EMA20 > EMA50) + VWAP support
+    elif (current_price > ema50 and ema20 > ema50 and abs(ema20_dist) < 1.5 and
+          current_price > vwap and 35 <= rsi <= 65):
+        setup = "Intraday Pullback"
+        reasons.append(f"Price pulled to EMA20 ({ema20_dist:+.2f}%) in uptrend")
+        reasons.append(f"VWAP support at ₹{vwap:.2f}, RSI {rsi:.0f} entry zone")
+        points = 50
+
+    # VWAP BOUNCE: Price touches/bounces off VWAP with volume + CCI reversal
+    elif (abs(vwap_pct) < 1.0 and is_vol_spike and abs(cci) > 50 and
+          30 < rsi < 80 and macd_cross == "Bullish"):
+        setup = "VWAP Bounce"
+        reasons.append(f"Price at VWAP {vwap_pct:+.2f}%, strong volume bounce signal")
+        reasons.append(f"CCI {cci:.0f} reversal, RSI {rsi:.0f}")
+        points = 48
+
+    # GAP FILL: Opening gap with VWAP confirmation + trend
+    elif (has_gap and is_vol_spike and abs(gap_pct) > 2.0 and
+          ((gap_pct > 0 and current_price > vwap > ema20) or (gap_pct < 0 and current_price < vwap < ema20))):
+        setup = "Gap Fill Opportunity"
+        reasons.append(f"Opening gap {gap_pct:+.2f}% with VWAP/EMA confirmation")
+        reasons.append(f"High volume {vol_ratio:.1f}x validates move")
+        points = 45
+
+    # If none of the intraday setups match, fall through to swing/momentum setups
     # OVERBOUGHT: RSI > 75 OR price well above BB upper band
     # Catches: Adani Green (RSI 99), IDBI Bank (RSI 72+BB 80%), Cipla (BB 107%)
-    if rsi > 75 or bb_pct > 95:
+    elif rsi > 75 or bb_pct > 95:
         setup = "Overbought — Avoid"
         reasons.append(f"RSI {rsi:.0f} overbought" if rsi > 75 else f"BB {bb_pct:.0f}% — above upper band")
         points = max(0, 30 - int((rsi - 75) * 0.5)) if rsi > 75 else 10
@@ -2756,7 +2890,18 @@ def _swing_trade_score(technical, fundamental, sentiment, macro_adj):
         reasons.append(f"RSI {rsi:.0f}, no clear setup — wait for confirmation")
         points = 20
 
-    # ── Step 2: Volume confirmation bonus (0–20 pts) ─────────────────────────
+    # ── Step 2: VWAP & EMA Alignment Bonus (Intraday critical) ───────────────
+    # Price above VWAP in uptrend (EMA20 > EMA50)
+    if current_price > vwap and ema20 > ema50 and current_price > ema20:
+        points += 15; reasons.append(f"Institutional (VWAP) + trend (EMA) aligned bullish")
+    elif current_price < vwap and ema20 < ema50 and current_price < ema20:
+        points -= 12; reasons.append("Price/VWAP/EMA all bearish — caution")
+
+    # Pullback bonus: price near EMA20 in uptrend = dip-buy opportunity
+    if ema20 > ema50 and abs(ema20_dist) < 2.0 and current_price > vwap:
+        points += 10; reasons.append(f"Pullback to EMA20 in uptrend (golden dip)")
+
+    # ── Step 3: Volume confirmation bonus (0–20 pts) ─────────────────────────
     if vol_ratio >= 3.0:
         points += 20; reasons.append(f"Strong volume surge {vol_ratio:.1f}x avg")
     elif vol_ratio >= 2.0:
@@ -2766,19 +2911,19 @@ def _swing_trade_score(technical, fundamental, sentiment, macro_adj):
     elif vol_ratio < 0.5:
         points -= 5; reasons.append("Very low volume — low conviction")
 
-    # ── Step 3: MACD alignment (0–12 pts) ────────────────────────────────────
-    if macd_cross == "Bullish" and setup in ("Pullback Entry", "Oversold Reversal", "Momentum Breakout"):
+    # ── Step 4: MACD alignment (0–12 pts) ────────────────────────────────────
+    if macd_cross == "Bullish" and setup in ("Pullback Entry", "Oversold Reversal", "Momentum Breakout", "Intraday Breakout"):
         points += 12; reasons.append("MACD bullish crossover confirms entry")
     elif macd_cross == "Bearish" and setup in ("Overbought — Avoid", "Bearish — Avoid"):
         points += 8; reasons.append("MACD bearish crossover confirms caution")
 
-    # ── Step 4: 52-week position context ─────────────────────────────────────
+    # ── Step 5: 52-week position context ─────────────────────────────────────
     if w52_pct >= 80 and setup == "Momentum Breakout":
         points += 8; reasons.append(f"Near 52W high ({w52_pct:.0f}%) — strong trend")
     elif w52_pct <= 25 and setup in ("Oversold Reversal", "Pullback Entry"):
         points += 8; reasons.append(f"Near 52W low ({w52_pct:.0f}%) — value zone")
 
-    # ── Step 5: Fundamental quality (0–10 pts) ────────────────────────────────
+    # ── Step 6: Fundamental quality (0–10 pts) ────────────────────────────────
     if fundamental.get("status") == "ok":
         f_score = fundamental.get("score", 0)
         if f_score > 0.3:
@@ -2788,7 +2933,7 @@ def _swing_trade_score(technical, fundamental, sentiment, macro_adj):
         elif f_score < -0.2:
             points -= 5; reasons.append("Weak fundamentals — higher risk")
 
-    # ── Step 6: Macro adjustment (−8 to +8) ──────────────────────────────────
+    # ── Step 7: Macro adjustment (−8 to +8) ──────────────────────────────────
     macro_pts = int(macro_adj * 8)
     points += macro_pts
     if macro_adj > 0.05:
