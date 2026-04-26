@@ -2811,20 +2811,25 @@ def run_daily_picks(stocks_dict, market="India", max_scan=300):
 
     stocks_list = list(stocks_dict.items())[:max_scan]
     results = []
+    total_attempted = len(stocks_list)
 
     progress_bar = st.progress(0)
     status_text = st.empty()
-    total = len(stocks_list)
 
     for i, (name, ticker) in enumerate(stocks_list):
-        progress_bar.progress((i + 1) / total)
-        status_text.text(f"Scanning {i+1}/{total}: {name}")
+        progress_bar.progress((i + 1) / total_attempted)
+        status_text.text(f"Scanning {i+1}/{total_attempted}: {name}")
         try:
             stock_data = fetch_stock_data(ticker)
             if stock_data["status"] != "ok":
                 continue
             hist = stock_data.get("history")
             if hist is None or len(hist) < 50:
+                continue
+
+            # Skip illiquid stocks — avg volume < 50,000 shares/day
+            avg_vol = hist["Volume"].mean() if "Volume" in hist.columns else 0
+            if avg_vol < 50000:
                 continue
 
             technical = calculate_technical_indicators(hist)
@@ -2873,10 +2878,10 @@ def run_daily_picks(stocks_dict, market="India", max_scan=300):
     status_text.empty()
 
     results.sort(key=lambda x: x["Swing Score"], reverse=True)
-    return results, macro_sentiment_score, macro_headlines
+    return results, macro_sentiment_score, macro_headlines, total_attempted
 
 
-def generate_morning_report(picks_results):
+def generate_morning_report(picks_results, total_attempted=None):
     """Distil full scan results into top BUY and SELL/SHORT picks."""
     buy_setups  = {"Momentum Breakout", "Pullback Entry", "Oversold Reversal"}
     sell_setups = {"Overbought — Avoid", "Bearish — Avoid"}
@@ -2891,18 +2896,28 @@ def generate_morning_report(picks_results):
         key=lambda x: x["Swing Score"], reverse=True
     )[:5]
 
-    return {"buys": buys, "sells": sells, "total_scanned": len(picks_results)}
+    return {
+        "buys": buys,
+        "sells": sells,
+        "total_scanned": len(picks_results),
+        "total_attempted": total_attempted or len(picks_results),
+    }
 
 
 def render_morning_report(report, macro_score, macro_headlines, scan_universe, scan_date):
     """Render the formatted morning report."""
     buys  = report.get("buys", [])
     sells = report.get("sells", [])
-    total = report.get("total_scanned", 0)
+    total_scanned = report.get("total_scanned", 0)
+    total_attempted = report.get("total_attempted", total_scanned)
 
     # ── Header ────────────────────────────────────────────────────────────────
     macro_color = "#00c853" if macro_score > 0.05 else "#ff1744" if macro_score < -0.05 else "#ff8f00"
     macro_label = "Positive" if macro_score > 0.05 else "Negative" if macro_score < -0.05 else "Neutral"
+
+    # Display attempted vs successful analysis
+    scan_text = f"{total_scanned} of {total_attempted}" if total_attempted > total_scanned else str(total_scanned)
+    skip_note = f" ({total_attempted - total_scanned} skipped: illiquid or incomplete data)" if total_attempted > total_scanned else ""
 
     st.markdown(
         f"<div style='border:1px solid #e0e0e0;border-radius:10px;padding:16px 20px;"
@@ -2910,7 +2925,7 @@ def render_morning_report(report, macro_score, macro_headlines, scan_universe, s
         f"<h3 style='margin:0;'>Morning Report — {scan_date}</h3>"
         f"<p style='margin:6px 0 0 0;color:#555;'>"
         f"Universe: <b>{scan_universe}</b> &nbsp;|&nbsp; "
-        f"Stocks scanned: <b>{total}</b> &nbsp;|&nbsp; "
+        f"Stocks analyzed: <b>{scan_text}</b>{skip_note} &nbsp;|&nbsp; "
         f"Global Macro: <b style='color:{macro_color};'>{macro_label}</b> ({macro_score:+.3f})"
         f"</p></div>",
         unsafe_allow_html=True,
@@ -3029,16 +3044,25 @@ def render_morning_report(report, macro_score, macro_headlines, scan_universe, s
                 )
 
 
-def render_daily_picks(results, macro_score, macro_headlines, market="India"):
+def render_daily_picks(results, macro_score, macro_headlines, market="India", total_attempted=None):
     """Render daily trade picks with macro context."""
     # Global macro sentiment banner
     macro_color = "#00c853" if macro_score > 0.05 else "#ff1744" if macro_score < -0.05 else "#ff8f00"
     macro_label = "Positive" if macro_score > 0.05 else "Negative" if macro_score < -0.05 else "Neutral"
+
+    # Show scan stats
+    scan_info = f"Based on {len(macro_headlines)} global news items"
+    if total_attempted:
+        skipped = total_attempted - len(results)
+        scan_info += f" | Analyzed {len(results)} of {total_attempted} stocks"
+        if skipped > 0:
+            scan_info += f" ({skipped} skipped: illiquid or incomplete data)"
+
     st.markdown(
         f"<div style='background:#f5f5f5;border-left:4px solid {macro_color};padding:10px 16px;"
         f"border-radius:4px;margin-bottom:16px;'>"
         f"<b>Global Macro Sentiment:</b> <span style='color:{macro_color};font-weight:700;'>{macro_label}</span>"
-        f" &nbsp;|&nbsp; Score: {macro_score:+.3f} &nbsp;|&nbsp; Based on {len(macro_headlines)} global news items"
+        f" &nbsp;|&nbsp; Score: {macro_score:+.3f} &nbsp;|&nbsp; {scan_info}"
         f"</div>",
         unsafe_allow_html=True,
     )
@@ -4593,10 +4617,10 @@ def main():
                     st.error("Could not load universe. Check your watchlist or try again.")
                 else:
                     st.info(f"Scanning {len(mr_stocks)} stocks for {_today_str}... this may take a few minutes.")
-                    mr_results, mr_macro, mr_headlines = run_daily_picks(
+                    mr_results, mr_macro, mr_headlines, mr_attempted = run_daily_picks(
                         mr_stocks, market="India", max_scan=len(mr_stocks)
                     )
-                    mr_report = generate_morning_report(mr_results)
+                    mr_report = generate_morning_report(mr_results, mr_attempted)
                     st.session_state["mr_report"]           = mr_report
                     st.session_state["mr_macro"]            = mr_macro
                     st.session_state["mr_headlines"]        = mr_headlines
@@ -4675,19 +4699,21 @@ def main():
                 st.error("Could not build stock universe. Try again.")
             else:
                 st.info(f"Scanning {min(max_scan, len(universe))} stocks from {picks_universe}...")
-                picks_results, macro_score, macro_headlines = run_daily_picks(
+                picks_results, macro_score, macro_headlines, total_attempted = run_daily_picks(
                     universe, market="India", max_scan=max_scan
                 )
                 st.session_state["daily_picks_results"] = picks_results
                 st.session_state["daily_picks_macro_score"] = macro_score
                 st.session_state["daily_picks_macro_headlines"] = macro_headlines
+                st.session_state["daily_picks_total_attempted"] = total_attempted
 
         picks_results = st.session_state.get("daily_picks_results")
         macro_score = st.session_state.get("daily_picks_macro_score", 0.0)
         macro_headlines = st.session_state.get("daily_picks_macro_headlines", [])
+        total_attempted = st.session_state.get("daily_picks_total_attempted")
 
         if picks_results is not None:
-            render_daily_picks(picks_results, macro_score, macro_headlines, market="India")
+            render_daily_picks(picks_results, macro_score, macro_headlines, market="India", total_attempted=total_attempted)
         elif not daily_picks_btn:
             st.info("Choose your scan universe above and click **Run Today's Scan** to see today's trade setups.")
 
