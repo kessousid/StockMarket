@@ -1434,16 +1434,30 @@ def calculate_technical_indicators(price_df):
         has_gap = False
 
     # --- Pivot Points (Classic floor pivots from previous day) ---
-    if len(close) >= 2:
-        prev_high = float(high.iloc[-2])
-        prev_low = float(low.iloc[-2])
-        prev_close = float(close.iloc[-2])
-        pivot = (prev_high + prev_low + prev_close) / 3
-        r1 = 2 * pivot - prev_low
-        s1 = 2 * pivot - prev_high
-        r2 = pivot + (prev_high - prev_low)
-        s2 = pivot - (prev_high - prev_low)
-    else:
+    try:
+        if len(close) >= 2 and len(high) >= 2 and len(low) >= 2:
+            prev_high = float(high.iloc[-2])
+            prev_low = float(low.iloc[-2])
+            prev_close = float(close.iloc[-2])
+            if prev_high > 0 and prev_low > 0 and prev_close > 0:
+                pivot = (prev_high + prev_low + prev_close) / 3
+                r1 = 2 * pivot - prev_low
+                s1 = 2 * pivot - prev_high
+                r2 = pivot + (prev_high - prev_low)
+                s2 = pivot - (prev_high - prev_low)
+            else:
+                pivot = latest_price
+                r1 = latest_price * 1.02
+                s1 = latest_price * 0.98
+                r2 = latest_price * 1.04
+                s2 = latest_price * 0.96
+        else:
+            pivot = latest_price
+            r1 = latest_price * 1.02
+            s1 = latest_price * 0.98
+            r2 = latest_price * 1.04
+            s2 = latest_price * 0.96
+    except Exception:
         pivot = latest_price
         r1 = latest_price * 1.02
         s1 = latest_price * 0.98
@@ -1453,17 +1467,21 @@ def calculate_technical_indicators(price_df):
     # --- OBV & RSI Divergence Detection ---
     obv_bullish_div = False
     obv_bearish_div = False
-    if len(obv) >= 10:
-        recent_obv = obv.tail(5)
-        prior_obv = obv.tail(10).head(5)
-        recent_close = close.tail(5)
-        prior_close = close.tail(10).head(5)
-        # Bearish divergence: price makes higher high but OBV makes lower high
-        if recent_close.max() > prior_close.max() and recent_obv.max() < prior_obv.max():
-            obv_bearish_div = True
-        # Bullish divergence: price makes lower low but OBV makes higher low
-        if recent_close.min() < prior_close.min() and recent_obv.min() > prior_obv.min():
-            obv_bullish_div = True
+    try:
+        if len(obv) >= 10 and len(close) >= 10:
+            recent_obv = obv.tail(5)
+            prior_obv = obv.tail(10).head(5)
+            recent_close = close.tail(5)
+            prior_close = close.tail(10).head(5)
+            # Bearish divergence: price makes higher high but OBV makes lower high
+            if len(recent_close) > 0 and len(prior_close) > 0 and len(recent_obv) > 0 and len(prior_obv) > 0:
+                if float(recent_close.max()) > float(prior_close.max()) and float(recent_obv.max()) < float(prior_obv.max()):
+                    obv_bearish_div = True
+                # Bullish divergence: price makes lower low but OBV makes higher low
+                if float(recent_close.min()) < float(prior_close.min()) and float(recent_obv.min()) > float(prior_obv.min()):
+                    obv_bullish_div = True
+    except Exception:
+        pass
 
     # --- CCI (Commodity Channel Index) - cyclical moves ---
     if len(close) >= 20:
@@ -3122,9 +3140,16 @@ def run_daily_picks(stocks_dict, market="India", max_scan=300):
             # Use cached news for speed (no per-stock news fetch in daily scan)
             sentiment = {"status": "insufficient_data"}
 
-            swing_score, setup, reasons = _swing_trade_score(
-                technical, fundamental, sentiment, macro_sentiment_score, market_ctx
-            )
+            # Try with market context, fall back to basic scoring if error
+            try:
+                swing_score, setup, reasons = _swing_trade_score(
+                    technical, fundamental, sentiment, macro_sentiment_score, market_ctx
+                )
+            except Exception:
+                # Fallback: score without market context
+                swing_score, setup, reasons = _swing_trade_score(
+                    technical, fundamental, sentiment, macro_sentiment_score, None
+                )
             # Show everything — let the user filter. Nothing hidden.
 
             price = technical.get("current_price", 0)
