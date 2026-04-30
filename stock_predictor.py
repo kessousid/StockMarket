@@ -1433,6 +1433,38 @@ def calculate_technical_indicators(price_df):
         gap_pct = 0
         has_gap = False
 
+    # --- Pivot Points (Classic floor pivots from previous day) ---
+    if len(close) >= 2:
+        prev_high = float(high.iloc[-2])
+        prev_low = float(low.iloc[-2])
+        prev_close = float(close.iloc[-2])
+        pivot = (prev_high + prev_low + prev_close) / 3
+        r1 = 2 * pivot - prev_low
+        s1 = 2 * pivot - prev_high
+        r2 = pivot + (prev_high - prev_low)
+        s2 = pivot - (prev_high - prev_low)
+    else:
+        pivot = latest_price
+        r1 = latest_price * 1.02
+        s1 = latest_price * 0.98
+        r2 = latest_price * 1.04
+        s2 = latest_price * 0.96
+
+    # --- OBV & RSI Divergence Detection ---
+    obv_bullish_div = False
+    obv_bearish_div = False
+    if len(obv) >= 10:
+        recent_obv = obv.tail(5)
+        prior_obv = obv.tail(10).head(5)
+        recent_close = close.tail(5)
+        prior_close = close.tail(10).head(5)
+        # Bearish divergence: price makes higher high but OBV makes lower high
+        if recent_close.max() > prior_close.max() and recent_obv.max() < prior_obv.max():
+            obv_bearish_div = True
+        # Bullish divergence: price makes lower low but OBV makes higher low
+        if recent_close.min() < prior_close.min() and recent_obv.min() > prior_obv.min():
+            obv_bullish_div = True
+
     # --- CCI (Commodity Channel Index) - cyclical moves ---
     if len(close) >= 20:
         typical_price = (high + low + close) / 3
@@ -1508,6 +1540,15 @@ def calculate_technical_indicators(price_df):
         "has_gap": has_gap,
         "cci": round(latest_cci, 1),
         "cci_signal": cci_signal,
+        # Pivot Points (Classic floor pivots)
+        "pivot": round(pivot, 2),
+        "r1": round(r1, 2),
+        "s1": round(s1, 2),
+        "r2": round(r2, 2),
+        "s2": round(s2, 2),
+        # OBV Divergence
+        "obv_bullish_div": obv_bullish_div,
+        "obv_bearish_div": obv_bearish_div,
     }
 
 
@@ -2784,7 +2825,7 @@ def generate_prediction(technical, sentiment, fundamental, oi_data=None):
 # Section 8b: Daily Trade Picks & Swing Trade Scanner
 # =============================================================================
 
-def _swing_trade_score(technical, fundamental, sentiment, macro_adj):
+def _swing_trade_score(technical, fundamental, sentiment, macro_adj, market_ctx=None):
     """Classify and score every stock — nothing is hidden, all 500 get a label."""
     if technical.get("status") != "ok":
         return 0, "No Data", []
@@ -2941,7 +2982,95 @@ def _swing_trade_score(technical, fundamental, sentiment, macro_adj):
     elif macro_adj < -0.05:
         reasons.append("Negative global macro — add caution")
 
+    # ── Step 8: Market Direction Filter (±15 pts) ────────────────────────────
+    if market_ctx:
+        nifty_trend = market_ctx.get("nifty_trend", "neutral")
+        if nifty_trend == "down" and setup in ("Intraday Breakout", "Momentum Breakout", "Pullback Entry"):
+            points -= 15
+            reasons.append("Nifty downtrend — reduce long exposure")
+        elif nifty_trend == "up" and setup in ("Intraday Breakout", "Momentum Breakout", "Pullback Entry"):
+            points += 10
+            reasons.append("Nifty uptrend supports long setup")
+
+    # ── Step 9: India VIX Filter (±10 pts) ──────────────────────────────────
+    if market_ctx:
+        india_vix = market_ctx.get("india_vix", 15)
+        if india_vix > 25:
+            points -= 10
+            reasons.append(f"VIX {india_vix:.1f} — high volatility, tighten stops")
+        elif india_vix < 15:
+            points += 5
+            reasons.append(f"VIX {india_vix:.1f} — calm market, favorable for longs")
+
+    # ── Step 10: Pivot Point Proximity (±12 pts) ────────────────────────────
+    pivot = technical.get("pivot", 0)
+    r1 = technical.get("r1", 0)
+    s1 = technical.get("s1", 0)
+    if pivot and s1 and current_price:
+        near_support = abs(current_price - s1) / current_price < 0.01  # within 1%
+        near_resistance = abs(current_price - r1) / current_price < 0.01
+        if near_support and setup in ("Pullback Entry", "VWAP Bounce", "Oversold Reversal"):
+            points += 12
+            reasons.append(f"Price at Pivot S1 ₹{s1:.1f} — strong support zone")
+        if near_resistance and setup in ("Momentum Breakout", "Intraday Breakout"):
+            points -= 8
+            reasons.append(f"Price approaching Pivot R1 ₹{r1:.1f} — resistance ahead")
+
+    # ── Step 11: OBV Divergence (±10 pts) ────────────────────────────────────
+    if technical.get("obv_bullish_div") and setup in ("Oversold Reversal", "Pullback Entry"):
+        points += 10
+        reasons.append("OBV bullish divergence — accumulation detected")
+    if technical.get("obv_bearish_div") and setup in ("Momentum Breakout", "Overbought — Avoid"):
+        points -= 10
+        reasons.append("OBV bearish divergence — distribution detected")
+
+    # ── Step 12: Risk-Reward Validation ──────────────────────────────────────
+    atr = technical.get("atr", 0)
+    if atr > 0 and setup in ("Intraday Breakout", "Pullback Entry", "Momentum Breakout"):
+        reward = atr * 2.5
+        risk = atr * 1.2
+        rr = reward / risk
+        if rr < 1.5:
+            points -= 10
+            reasons.append(f"R:R {rr:.1f} below minimum 1.5 — suboptimal risk")
+
+    # ── Step 13: Time-of-Day Filter ──────────────────────────────────────────
+    try:
+        now_ist = datetime.now()
+        hour, minute = now_ist.hour, now_ist.minute
+        session_min = (hour - 9) * 60 + (minute - 15)  # 0 = market open (9:15 AM)
+        if session_min > 345:  # after 3:00 PM IST (last 30 min)
+            points -= 15
+            reasons.append("Last 30 min of session — avoid new entries")
+        elif 0 <= session_min <= 45:  # 9:15–10:00 AM — best entry window
+            points += 8
+            reasons.append("Optimal entry window (9:15–10:00 AM)")
+    except Exception:
+        pass
+
     return min(max(points, 0), 100), setup, reasons
+
+
+def fetch_market_context():
+    """Fetch Nifty 50 trend and India VIX for market context."""
+    yf = _yf()
+    ctx = {}
+    try:
+        nifty = yf.download("^NSEI", period="5d", interval="1d", progress=False, auto_adjust=True)
+        if not nifty.empty and len(nifty) >= 5:
+            nifty_close = nifty["Close"]
+            nifty_trend = "up" if float(nifty_close.iloc[-1]) > float(nifty_close.iloc[-5:].mean()) else "down"
+            ctx["nifty_trend"] = nifty_trend
+            ctx["nifty_price"] = float(nifty_close.iloc[-1])
+    except Exception:
+        pass
+    try:
+        vix = yf.download("^INDIAVIX", period="5d", interval="1d", progress=False, auto_adjust=True)
+        if not vix.empty and len(vix) >= 1:
+            ctx["india_vix"] = float(vix["Close"].iloc[-1])
+    except Exception:
+        pass
+    return ctx
 
 
 def run_daily_picks(stocks_dict, market="India", max_scan=300):
@@ -2953,6 +3082,9 @@ def run_daily_picks(stocks_dict, market="India", max_scan=300):
         vader = _get_vader_analyzer()
         macro_scores = [vader.polarity_scores(h["title"])["compound"] for h in macro_headlines if h.get("title")]
         macro_sentiment_score = float(np.mean(macro_scores)) if macro_scores else 0.0
+
+    # Fetch market context once (Nifty trend, India VIX)
+    market_ctx = fetch_market_context()
 
     stocks_list = list(stocks_dict.items())[:max_scan]
     results = []
@@ -2991,7 +3123,7 @@ def run_daily_picks(stocks_dict, market="India", max_scan=300):
             sentiment = {"status": "insufficient_data"}
 
             swing_score, setup, reasons = _swing_trade_score(
-                technical, fundamental, sentiment, macro_sentiment_score
+                technical, fundamental, sentiment, macro_sentiment_score, market_ctx
             )
             # Show everything — let the user filter. Nothing hidden.
 
