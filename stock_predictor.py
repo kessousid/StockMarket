@@ -2982,24 +2982,24 @@ def _swing_trade_score(technical, fundamental, sentiment, macro_adj, market_ctx=
     elif macro_adj < -0.05:
         reasons.append("Negative global macro — add caution")
 
-    # ── Step 8: Market Direction Filter (±15 pts) ────────────────────────────
+    # ── Step 8: Market Direction Filter (±8 pts, reduced) ────────────────────────────
     if market_ctx:
         nifty_trend = market_ctx.get("nifty_trend", "neutral")
         if nifty_trend == "down" and setup in ("Intraday Breakout", "Momentum Breakout", "Pullback Entry"):
-            points -= 15
+            points -= 8
             reasons.append("Nifty downtrend — reduce long exposure")
         elif nifty_trend == "up" and setup in ("Intraday Breakout", "Momentum Breakout", "Pullback Entry"):
-            points += 10
+            points += 5
             reasons.append("Nifty uptrend supports long setup")
 
-    # ── Step 9: India VIX Filter (±10 pts) ──────────────────────────────────
+    # ── Step 9: India VIX Filter (±5 pts, reduced) ──────────────────────────────────
     if market_ctx:
         india_vix = market_ctx.get("india_vix", 15)
         if india_vix > 25:
-            points -= 10
+            points -= 5
             reasons.append(f"VIX {india_vix:.1f} — high volatility, tighten stops")
         elif india_vix < 15:
-            points += 5
+            points += 3
             reasons.append(f"VIX {india_vix:.1f} — calm market, favorable for longs")
 
     # ── Step 10: Pivot Point Proximity (±12 pts) ────────────────────────────
@@ -3024,26 +3024,26 @@ def _swing_trade_score(technical, fundamental, sentiment, macro_adj, market_ctx=
         points -= 10
         reasons.append("OBV bearish divergence — distribution detected")
 
-    # ── Step 12: Risk-Reward Validation ──────────────────────────────────────
+    # ── Step 12: Risk-Reward Validation (informational only) ──────────────────────────────────────
     atr = technical.get("atr", 0)
     if atr > 0 and setup in ("Intraday Breakout", "Pullback Entry", "Momentum Breakout"):
         reward = atr * 2.5
         risk = atr * 1.2
         rr = reward / risk
-        if rr < 1.5:
-            points -= 10
-            reasons.append(f"R:R {rr:.1f} below minimum 1.5 — suboptimal risk")
+        if rr < 1.2:
+            points -= 3
+            reasons.append(f"R:R {rr:.1f} below 1.2 — tight risk window")
 
-    # ── Step 13: Time-of-Day Filter ──────────────────────────────────────────
+    # ── Step 13: Time-of-Day Filter (reduced impact) ──────────────────────────────────────────
     try:
         now_ist = datetime.now()
         hour, minute = now_ist.hour, now_ist.minute
         session_min = (hour - 9) * 60 + (minute - 15)  # 0 = market open (9:15 AM)
         if session_min > 345:  # after 3:00 PM IST (last 30 min)
-            points -= 15
-            reasons.append("Last 30 min of session — avoid new entries")
+            points -= 5
+            reasons.append("Last 30 min of session — lower conviction")
         elif 0 <= session_min <= 45:  # 9:15–10:00 AM — best entry window
-            points += 8
+            points += 3
             reasons.append("Optimal entry window (9:15–10:00 AM)")
     except Exception:
         pass
